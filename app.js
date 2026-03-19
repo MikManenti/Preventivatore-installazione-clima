@@ -1,0 +1,961 @@
+'use strict';
+
+// ════════════════════════════════════════════════════════════════
+//  Constants
+// ════════════════════════════════════════════════════════════════
+const GRID      = 20;   // pixels per grid cell
+const UNIT_W    = 32;   // AC-unit icon width  (px)
+const UNIT_H    = 22;   // AC-unit icon height (px)
+const WALL_T    = 3;    // wall stroke thickness
+const PIPE_T    = 2.5;  // pipe stroke thickness
+const HIT_R     = 10;   // hit-test radius (px)
+const SNAP_R    = 8;    // snap-to-unit radius (px)
+
+// ════════════════════════════════════════════════════════════════
+//  Pre-configured templates  (coordinates in grid cells)
+// ════════════════════════════════════════════════════════════════
+const TEMPLATES = {
+  studio: {
+    name: 'Monolocale',
+    rooms: [
+      { gx:2,  gy:2,  gw:20, gh:14, label:'Soggiorno / Camera', color:'#f5f5f0' },
+      { gx:2,  gy:16, gw:8,  gh:7,  label:'Bagno',              color:'#ddeeff' },
+      { gx:10, gy:16, gw:12, gh:7,  label:'Cucina',             color:'#fff8e1' },
+    ]
+  },
+  bilocale: {
+    name: 'Bilocale',
+    rooms: [
+      { gx:2,  gy:2,  gw:18, gh:14, label:'Soggiorno',  color:'#f5f5f0' },
+      { gx:20, gy:2,  gw:10, gh:14, label:'Cucina',     color:'#fff8e1' },
+      { gx:2,  gy:16, gw:16, gh:12, label:'Camera',     color:'#f0f0fa' },
+      { gx:18, gy:16, gw:12, gh:7,  label:'Bagno',      color:'#ddeeff' },
+      { gx:18, gy:23, gw:12, gh:5,  label:'Corridoio',  color:'#f0f0ea' },
+    ]
+  },
+  trilocale: {
+    name: 'Trilocale',
+    rooms: [
+      { gx:2,  gy:2,  gw:22, gh:14, label:'Soggiorno',  color:'#f5f5f0' },
+      { gx:24, gy:2,  gw:12, gh:14, label:'Cucina',     color:'#fff8e1' },
+      { gx:36, gy:2,  gw:6,  gh:14, label:'Corridoio',  color:'#f0f0ea' },
+      { gx:2,  gy:16, gw:16, gh:12, label:'Camera 1',   color:'#f0f0fa' },
+      { gx:18, gy:16, gw:12, gh:12, label:'Camera 2',   color:'#f0faf0' },
+      { gx:30, gy:16, gw:6,  gh:7,  label:'Bagno',      color:'#ddeeff' },
+      { gx:30, gy:23, gw:6,  gh:5,  label:'WC',         color:'#dde8ff' },
+      { gx:36, gy:16, gw:6,  gh:12, label:'Antibagno',  color:'#f0f0ea' },
+    ]
+  },
+  quadrilocale: {
+    name: 'Quadrilocale',
+    rooms: [
+      { gx:2,  gy:2,  gw:20, gh:14, label:'Soggiorno',  color:'#f5f5f0' },
+      { gx:22, gy:2,  gw:14, gh:14, label:'Cucina',     color:'#fff8e1' },
+      { gx:36, gy:2,  gw:8,  gh:14, label:'Corridoio',  color:'#f0f0ea' },
+      { gx:2,  gy:16, gw:16, gh:12, label:'Camera 1',   color:'#f0f0fa' },
+      { gx:18, gy:16, gw:12, gh:12, label:'Camera 2',   color:'#f0faf0' },
+      { gx:30, gy:16, gw:14, gh:12, label:'Camera 3',   color:'#faf0f0' },
+      { gx:36, gy:16, gw:8,  gh:6,  label:'Bagno',      color:'#ddeeff' },
+      { gx:36, gy:22, gw:8,  gh:6,  label:'WC',         color:'#dde8ff' },
+    ]
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+//  Application state
+// ════════════════════════════════════════════════════════════════
+const app = {
+  canvas: null,
+  ctx:    null,
+
+  // Floor-plan data
+  rooms:       [],   // { x, y, w, h, label, color }  pixels
+  manualWalls: [],   // { x1, y1, x2, y2 }             pixels
+
+  // AC units
+  indoorUnit:  null, // { x, y }
+  outdoorUnit: null, // { x, y }
+
+  // Completed pipe path
+  pipe: [],          // [{ x, y }]
+
+  // Pipe being drawn (in-progress)
+  pipeWIP: [],       // [{ x, y }]
+
+  // Drawing state
+  tool:       'select',
+  drawStart:  null,  // for drawRoom  (snapped {x,y})
+  wallStart:  null,  // for drawWall  (snapped {x,y})
+
+  // Select / drag state
+  dragTarget: null,  // { type, index?, ox, oy }
+  dragging:   false,
+
+  // Scale
+  metersPerCell: 0.5,
+
+  // Mouse position (raw pixels)
+  mouse: { x: 0, y: 0 },
+
+  // Undo history  (array of JSON snapshots)
+  history: [],
+};
+
+// ════════════════════════════════════════════════════════════════
+//  Initialisation
+// ════════════════════════════════════════════════════════════════
+function init() {
+  app.canvas = document.getElementById('main-canvas');
+  app.ctx    = app.canvas.getContext('2d');
+
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  // Canvas events
+  app.canvas.addEventListener('mousedown',   onMouseDown);
+  app.canvas.addEventListener('mousemove',   onMouseMove);
+  app.canvas.addEventListener('mouseup',     onMouseUp);
+  app.canvas.addEventListener('dblclick',    onDblClick);
+  app.canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  document.addEventListener('keydown', onKeyDown);
+
+  // Tool buttons
+  document.querySelectorAll('.tool-btn').forEach(btn =>
+    btn.addEventListener('click', () => selectTool(btn.dataset.tool))
+  );
+
+  // Template buttons
+  document.querySelectorAll('.tpl-btn').forEach(btn =>
+    btn.addEventListener('click', () => loadTemplate(btn.dataset.template))
+  );
+
+  // Action buttons
+  document.getElementById('complete-pipe-btn')
+    .addEventListener('click', completePipe);
+  document.getElementById('undo-btn')
+    .addEventListener('click', undo);
+  document.getElementById('clear-pipe-btn')
+    .addEventListener('click', clearPipe);
+  document.getElementById('clear-all-btn')
+    .addEventListener('click', clearAll);
+
+  // Scale input
+  document.getElementById('scale-input')
+    .addEventListener('change', e => {
+      app.metersPerCell = Math.max(0.1, parseFloat(e.target.value) || 0.5);
+      updateResults();
+      render();
+    });
+
+  // Load default template
+  loadTemplate('bilocale');
+  updateHint();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Canvas resize
+// ════════════════════════════════════════════════════════════════
+function resizeCanvas() {
+  const wrapper = document.getElementById('canvas-wrapper');
+  app.canvas.width  = wrapper.clientWidth;
+  app.canvas.height = wrapper.clientHeight - 24; // minus status bar
+  render();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Coordinate helpers
+// ════════════════════════════════════════════════════════════════
+function getPos(e) {
+  const r = app.canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+function snap(x, y) {
+  return {
+    x: Math.round(x / GRID) * GRID,
+    y: Math.round(y / GRID) * GRID
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Template loading
+// ════════════════════════════════════════════════════════════════
+function loadTemplate(name) {
+  const tpl = TEMPLATES[name];
+  if (!tpl) return;
+  saveHistory();
+
+  app.rooms = tpl.rooms.map(r => ({
+    x: r.gx * GRID,
+    y: r.gy * GRID,
+    w: r.gw * GRID,
+    h: r.gh * GRID,
+    label: r.label,
+    color: r.color,
+  }));
+  app.manualWalls = [];
+  app.indoorUnit  = null;
+  app.outdoorUnit = null;
+  app.pipe        = [];
+  app.pipeWIP     = [];
+
+  render();
+  updateResults();
+  setStatus(`Template "${tpl.name}" caricato. Posiziona split interno (❄) e unità esterna (🌡).`);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Wall helpers
+// ════════════════════════════════════════════════════════════════
+function wallsEqual(a, b) {
+  return (a.x1 === b.x1 && a.y1 === b.y1 && a.x2 === b.x2 && a.y2 === b.y2) ||
+         (a.x1 === b.x2 && a.y1 === b.y2 && a.x2 === b.x1 && a.y2 === b.y1);
+}
+
+/** Extract unique wall segments from room rectangles. */
+function roomWalls(rooms) {
+  const walls = [];
+  for (const r of rooms) {
+    const { x, y, w, h } = r;
+    const edges = [
+      { x1: x,   y1: y,   x2: x+w, y2: y   },
+      { x1: x+w, y1: y,   x2: x+w, y2: y+h },
+      { x1: x+w, y1: y+h, x2: x,   y2: y+h },
+      { x1: x,   y1: y+h, x2: x,   y2: y   },
+    ];
+    for (const e of edges) {
+      if (!walls.some(w2 => wallsEqual(w2, e))) walls.push(e);
+    }
+  }
+  return walls;
+}
+
+function allWalls() {
+  return [...roomWalls(app.rooms), ...app.manualWalls];
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Geometry
+// ════════════════════════════════════════════════════════════════
+function dist(x1, y1, x2, y2) {
+  return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+}
+
+function ptNearSeg(px, py, x1, y1, x2, y2, r) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-10) return dist(px, py, x1, y1) <= r;
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+  return dist(px, py, x1 + t * dx, y1 + t * dy) <= r;
+}
+
+/**
+ * Returns true if segment A and segment B properly intersect
+ * (endpoints touching are NOT counted as intersections).
+ */
+function segsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
+  const dx1 = ax2 - ax1, dy1 = ay2 - ay1;
+  const dx2 = bx2 - bx1, dy2 = by2 - by1;
+  const denom = dx1 * dy2 - dy1 * dx2;
+  if (Math.abs(denom) < 1e-9) return false; // parallel / collinear
+  const ex = bx1 - ax1, ey = by1 - ay1;
+  const t = (ex * dy2 - ey * dx2) / denom;
+  const u = (ex * dy1 - ey * dx1) / denom;
+  const EPS = 1e-9;
+  return t >= EPS && t <= 1 - EPS && u >= EPS && u <= 1 - EPS;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Calculations
+// ════════════════════════════════════════════════════════════════
+function calculateResults() {
+  const pipe = app.pipe;
+  if (pipe.length < 2) return null;
+
+  // Length
+  let px = 0;
+  for (let i = 1; i < pipe.length; i++)
+    px += dist(pipe[i-1].x, pipe[i-1].y, pipe[i].x, pipe[i].y);
+  const meters = (px / GRID) * app.metersPerCell;
+
+  // Wall crossings
+  const walls = allWalls();
+  let crossings = 0;
+  for (let i = 1; i < pipe.length; i++) {
+    const { x: ax1, y: ay1 } = pipe[i-1];
+    const { x: ax2, y: ay2 } = pipe[i];
+    for (const w of walls) {
+      if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2))
+        crossings++;
+    }
+  }
+  return { meters, crossings };
+}
+
+function complexityLabel(crossingCount) {
+  if (crossingCount === 0) return { text: 'Semplice (stessa parete)', cls: 'complexity-simple' };
+  if (crossingCount === 1) return { text: 'Standard (1 foratura)',   cls: 'complexity-standard' };
+  if (crossingCount <= 3)  return { text: 'Media complessità',       cls: 'complexity-medium' };
+  return                          { text: 'Alta complessità',         cls: 'complexity-high' };
+}
+
+function updateResults() {
+  const r  = calculateResults();
+  const el = id => document.getElementById(id);
+
+  if (!r) {
+    el('res-length').textContent     = '—';
+    el('res-walls').textContent      = '—';
+    el('res-complexity').textContent = '—';
+    el('res-complexity').className   = 'res-val';
+    return;
+  }
+
+  el('res-length').textContent     = r.meters.toFixed(1) + ' m';
+  el('res-walls').textContent      = r.crossings;
+  const c = complexityLabel(r.crossings);
+  el('res-complexity').textContent = c.text;
+  el('res-complexity').className   = 'res-val ' + c.cls;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Rendering
+// ════════════════════════════════════════════════════════════════
+function render() {
+  const { ctx, canvas } = app;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  drawGrid();
+  drawRooms();
+  drawManualWalls();
+  drawPipe();
+  drawAcUnits();
+  drawInProgress();
+  updateMousePos();
+}
+
+/* ── Grid ── */
+function drawGrid() {
+  const { ctx, canvas } = app;
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x <= canvas.width; x += GRID) {
+    ctx.strokeStyle = x % (GRID * 5) === 0 ? '#d0d0d0' : '#ebebeb';
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+  }
+  for (let y = 0; y <= canvas.height; y += GRID) {
+    ctx.strokeStyle = y % (GRID * 5) === 0 ? '#d0d0d0' : '#ebebeb';
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+  }
+}
+
+/* ── Rooms ── */
+function drawRooms() {
+  const ctx = app.ctx;
+  for (const room of app.rooms) {
+    // Fill
+    ctx.fillStyle = room.color || '#f5f5f0';
+    ctx.fillRect(room.x, room.y, room.w, room.h);
+    // Border
+    ctx.strokeStyle = '#2c2c2c';
+    ctx.lineWidth   = WALL_T;
+    ctx.strokeRect(room.x, room.y, room.w, room.h);
+    // Label
+    ctx.fillStyle    = '#555';
+    ctx.font         = '11px Segoe UI, sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    drawWrappedText(ctx, room.label, room.x + room.w / 2, room.y + room.h / 2,
+                    room.w - 10, 14);
+  }
+}
+
+function drawWrappedText(ctx, text, cx, cy, maxW, lh) {
+  const words = text.split(/[\s/]+/);
+  if (words.length <= 1 || ctx.measureText(text).width <= maxW) {
+    ctx.fillText(text, cx, cy, maxW);
+    return;
+  }
+  const mid = Math.ceil(words.length / 2);
+  ctx.fillText(words.slice(0, mid).join(' '), cx, cy - lh / 2, maxW);
+  ctx.fillText(words.slice(mid).join(' '),    cx, cy + lh / 2, maxW);
+}
+
+/* ── Manual walls ── */
+function drawManualWalls() {
+  const ctx = app.ctx;
+  ctx.strokeStyle = '#2c2c2c';
+  ctx.lineWidth   = WALL_T;
+  ctx.lineCap     = 'round';
+  ctx.setLineDash([]);
+  for (const w of app.manualWalls) {
+    ctx.beginPath();
+    ctx.moveTo(w.x1, w.y1);
+    ctx.lineTo(w.x2, w.y2);
+    ctx.stroke();
+  }
+}
+
+/* ── AC units ── */
+function drawAcUnits() {
+  const ctx = app.ctx;
+  const hw = UNIT_W / 2, hh = UNIT_H / 2;
+
+  if (app.indoorUnit) {
+    const { x, y } = app.indoorUnit;
+    drawUnitBox(ctx, x - hw, y - hh, UNIT_W, UNIT_H, '#1976D2', '#0D47A1');
+    ctx.fillStyle    = '#fff';
+    ctx.font         = 'bold 8px Segoe UI, sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('❄ SPLIT INT.', x, y);
+  }
+
+  if (app.outdoorUnit) {
+    const { x, y } = app.outdoorUnit;
+    drawUnitBox(ctx, x - hw, y - hh, UNIT_W, UNIT_H, '#388E3C', '#1B5E20');
+    ctx.fillStyle    = '#fff';
+    ctx.font         = 'bold 8px Segoe UI, sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🌡 U.EST.', x, y);
+  }
+}
+
+function drawUnitBox(ctx, x, y, w, h, fill, stroke) {
+  ctx.shadowColor  = 'rgba(0,0,0,.25)';
+  ctx.shadowBlur   = 5;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle    = fill;
+  roundRect(ctx, x, y, w, h, 4);
+  ctx.fill();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth   = 1.5;
+  ctx.stroke();
+  ctx.shadowColor  = 'transparent';
+  ctx.shadowBlur   = 0;
+  ctx.shadowOffsetY = 0;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x, y, w, h, r);
+  } else {
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y,     x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h,     x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y,         x + r, y);
+    ctx.closePath();
+  }
+}
+
+/* ── Completed pipe ── */
+function drawPipe() {
+  const pts = app.pipe;
+  if (pts.length === 0) return;
+
+  const ctx = app.ctx;
+  ctx.strokeStyle = '#E91E63';
+  ctx.lineWidth   = PIPE_T;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+  ctx.setLineDash([]);
+
+  if (pts.length >= 2) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+
+    // Per-segment distance labels
+    for (let i = 1; i < pts.length; i++) {
+      const d = dist(pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y);
+      const m = (d / GRID) * app.metersPerCell;
+      if (m >= 0.1) {
+        const mx = (pts[i-1].x + pts[i].x) / 2;
+        const my = (pts[i-1].y + pts[i].y) / 2;
+        drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my);
+      }
+    }
+  }
+
+  // Waypoint dots
+  for (const pt of pts) pipeDot(ctx, pt.x, pt.y);
+}
+
+function pipeDot(ctx, x, y) {
+  ctx.fillStyle = '#E91E63';
+  ctx.beginPath();
+  ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawDistLabel(ctx, text, x, y) {
+  ctx.font         = 'bold 9px Segoe UI, sans-serif';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = 'rgba(255,255,255,.85)';
+  ctx.fillRect(x - tw / 2 - 2, y - 7, tw + 4, 14);
+  ctx.fillStyle = '#880E4F';
+  ctx.fillText(text, x, y);
+}
+
+/* ── In-progress drawing overlays ── */
+function drawInProgress() {
+  const ctx = app.ctx;
+  const m   = snap(app.mouse.x, app.mouse.y);
+
+  // Room drag preview
+  if (app.tool === 'drawRoom' && app.drawStart) {
+    const s  = app.drawStart;
+    const rx = Math.min(s.x, m.x), ry = Math.min(s.y, m.y);
+    const rw = Math.abs(m.x - s.x), rh = Math.abs(m.y - s.y);
+    if (rw > 0 && rh > 0) {
+      ctx.fillStyle = 'rgba(245,245,240,.55)';
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth   = WALL_T;
+      ctx.setLineDash([6, 3]);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.setLineDash([]);
+      // Dimensions
+      const mw = (rw / GRID) * app.metersPerCell;
+      const mh = (rh / GRID) * app.metersPerCell;
+      ctx.fillStyle    = '#333';
+      ctx.font         = '10px Segoe UI, sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(mw.toFixed(1) + ' m', rx + rw / 2, ry - 3);
+      ctx.textAlign    = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(mh.toFixed(1) + ' m', rx - 3, ry + rh / 2);
+    }
+  }
+
+  // Wall draw preview
+  if (app.tool === 'drawWall' && app.wallStart) {
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth   = WALL_T;
+    ctx.lineCap     = 'round';
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.moveTo(app.wallStart.x, app.wallStart.y);
+    ctx.lineTo(m.x, m.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    snapDot(ctx, app.wallStart.x, app.wallStart.y);
+    snapDot(ctx, m.x, m.y);
+  }
+
+  // Pipe WIP
+  if (app.pipeWIP.length > 0) {
+    const pts = app.pipeWIP;
+    ctx.strokeStyle = '#E91E63';
+    ctx.lineWidth   = PIPE_T;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+    for (const pt of pts) pipeDot(ctx, pt.x, pt.y);
+
+    // Ghost line to snapped cursor
+    ctx.strokeStyle = 'rgba(233,30,99,.4)';
+    ctx.lineWidth   = 1.5;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    ctx.lineTo(m.x, m.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Snap cursor dot for drawing tools
+  if (['drawRoom', 'drawWall', 'drawPipe'].includes(app.tool)) {
+    snapDot(ctx, m.x, m.y);
+  }
+}
+
+function snapDot(ctx, x, y) {
+  ctx.strokeStyle = 'rgba(33,150,243,.8)';
+  ctx.fillStyle   = 'rgba(33,150,243,.2)';
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  ctx.arc(x, y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Mouse events
+// ════════════════════════════════════════════════════════════════
+function onMouseDown(e) {
+  if (e.button !== 0) return;
+  const raw = getPos(e);
+  const s   = snap(raw.x, raw.y);
+
+  switch (app.tool) {
+
+    case 'select':
+      startDrag(raw);
+      break;
+
+    case 'drawRoom':
+      app.drawStart = s;
+      break;
+
+    case 'drawWall':
+      if (!app.wallStart) {
+        app.wallStart = s;
+      } else {
+        if (s.x !== app.wallStart.x || s.y !== app.wallStart.y) {
+          saveHistory();
+          app.manualWalls.push({ x1: app.wallStart.x, y1: app.wallStart.y,
+                                  x2: s.x,             y2: s.y });
+          updateResults();
+        }
+        app.wallStart = null;
+      }
+      render();
+      break;
+
+    case 'placeIndoor':
+      saveHistory();
+      app.indoorUnit = { ...s };
+      setStatus('Split interno posizionato. Posiziona ora l\'unità esterna.');
+      render();
+      break;
+
+    case 'placeOutdoor':
+      saveHistory();
+      app.outdoorUnit = { ...s };
+      setStatus('Unità esterna posizionata. Seleziona "Traccia" per disegnare il percorso.');
+      render();
+      break;
+
+    case 'drawPipe': {
+      // Snap to indoor/outdoor unit if close
+      const snappedPt = snapToUnit(s) || s;
+      const now = Date.now();
+      const last = app._lastPipeClick;
+
+      // Detect double-click: same snapped position within 400 ms → complete pipe
+      if (app.pipeWIP.length >= 1 &&
+          last && last.x === snappedPt.x && last.y === snappedPt.y &&
+          now - last.time < 400) {
+        app._lastPipeClick = null;
+        if (app.pipeWIP.length >= 2) completePipe();
+      } else {
+        app._lastPipeClick = { time: now, x: snappedPt.x, y: snappedPt.y };
+        app.pipeWIP.push({ ...snappedPt });
+        syncCompletePipeBtn();
+        render();
+      }
+      break;
+    }
+  }
+}
+
+function onMouseMove(e) {
+  app.mouse = getPos(e);
+
+  if (app.dragTarget) moveDrag(app.mouse);
+
+  render();
+  updateMousePos();
+}
+
+function onMouseUp(e) {
+  if (e.button !== 0) return;
+
+  // Finish room draw on mouse-up
+  if (app.tool === 'drawRoom' && app.drawStart) {
+    const s  = snap(getPos(e).x, getPos(e).y);
+    const rx = Math.min(app.drawStart.x, s.x);
+    const ry = Math.min(app.drawStart.y, s.y);
+    const rw = Math.abs(s.x - app.drawStart.x);
+    const rh = Math.abs(s.y - app.drawStart.y);
+    if (rw >= GRID * 2 && rh >= GRID * 2) {
+      saveHistory();
+      app.rooms.push({ x: rx, y: ry, w: rw, h: rh, label: 'Stanza', color: '#f5f5f0' });
+      updateResults();
+    }
+    app.drawStart = null;
+    render();
+  }
+
+  if (app.dragTarget) {
+    app.dragTarget = null;
+    app.dragging   = false;
+    updateResults();
+    render();
+  }
+}
+
+function onDblClick(e) {
+  // Primary completion path is the timestamp detection in onMouseDown.
+  // This is a fallback for the edge case where the second mousedown did NOT
+  // trigger completion (e.g. the snap position changed slightly between clicks).
+  // By the time dblclick fires both mousedowns have already run, so pipeWIP
+  // may contain a duplicate last point that needs to be removed first.
+  if (app.tool === 'drawPipe' && app.pipeWIP.length >= 2) {
+    app.pipeWIP.pop(); // remove duplicate added by second mousedown
+    if (app.pipeWIP.length >= 2) completePipe();
+  }
+}
+
+function onKeyDown(e) {
+  if (e.key === 'Escape') {
+    app.drawStart = null;
+    app.wallStart = null;
+    app.pipeWIP   = [];
+    syncCompletePipeBtn();
+    render();
+    setStatus('Operazione annullata.');
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    undo();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Drag helpers (select tool)
+// ════════════════════════════════════════════════════════════════
+function startDrag(pos) {
+  app.dragging   = false;
+  app.dragTarget = null;
+
+  // Indoor unit
+  if (app.indoorUnit &&
+      dist(pos.x, pos.y, app.indoorUnit.x, app.indoorUnit.y) <= UNIT_W / 2 + 4) {
+    app.dragTarget = { type: 'indoor', ox: pos.x - app.indoorUnit.x,
+                                        oy: pos.y - app.indoorUnit.y };
+    return;
+  }
+  // Outdoor unit
+  if (app.outdoorUnit &&
+      dist(pos.x, pos.y, app.outdoorUnit.x, app.outdoorUnit.y) <= UNIT_W / 2 + 4) {
+    app.dragTarget = { type: 'outdoor', ox: pos.x - app.outdoorUnit.x,
+                                         oy: pos.y - app.outdoorUnit.y };
+    return;
+  }
+  // Pipe waypoints
+  for (let i = 0; i < app.pipe.length; i++) {
+    if (dist(pos.x, pos.y, app.pipe[i].x, app.pipe[i].y) <= HIT_R) {
+      app.dragTarget = { type: 'pipe', index: i,
+                          ox: pos.x - app.pipe[i].x,
+                          oy: pos.y - app.pipe[i].y };
+      return;
+    }
+  }
+  // Rooms
+  for (let i = app.rooms.length - 1; i >= 0; i--) {
+    const r = app.rooms[i];
+    if (pos.x >= r.x && pos.x <= r.x + r.w &&
+        pos.y >= r.y && pos.y <= r.y + r.h) {
+      app.dragTarget = { type: 'room', index: i,
+                          ox: pos.x - r.x, oy: pos.y - r.y };
+      return;
+    }
+  }
+}
+
+function moveDrag(pos) {
+  const dt = app.dragTarget;
+  if (!dt) return;
+
+  if (!app.dragging) {
+    const orig = origPos(dt);
+    if (orig && dist(pos.x, pos.y, orig.x + dt.ox, orig.y + dt.oy) > 4) {
+      app.dragging = true;
+      saveHistory();
+    }
+  }
+  if (!app.dragging) return;
+
+  const s = snap(pos.x - dt.ox, pos.y - dt.oy);
+  switch (dt.type) {
+    case 'indoor':  app.indoorUnit  = { x: s.x, y: s.y }; break;
+    case 'outdoor': app.outdoorUnit = { x: s.x, y: s.y }; break;
+    case 'pipe':    app.pipe[dt.index] = { x: s.x, y: s.y }; break;
+    case 'room': {
+      app.rooms[dt.index].x = s.x;
+      app.rooms[dt.index].y = s.y;
+      break;
+    }
+  }
+}
+
+function origPos(dt) {
+  switch (dt.type) {
+    case 'indoor':  return app.indoorUnit  ? { ...app.indoorUnit }  : null;
+    case 'outdoor': return app.outdoorUnit ? { ...app.outdoorUnit } : null;
+    case 'pipe':    return app.pipe[dt.index] ? { ...app.pipe[dt.index] } : null;
+    case 'room':    return app.rooms[dt.index]
+                           ? { x: app.rooms[dt.index].x, y: app.rooms[dt.index].y }
+                           : null;
+  }
+  return null;
+}
+
+// Snap point to indoor/outdoor unit position if within SNAP_R
+function snapToUnit(pt) {
+  if (app.indoorUnit &&
+      dist(pt.x, pt.y, app.indoorUnit.x, app.indoorUnit.y) <= SNAP_R)
+    return { ...app.indoorUnit };
+  if (app.outdoorUnit &&
+      dist(pt.x, pt.y, app.outdoorUnit.x, app.outdoorUnit.y) <= SNAP_R)
+    return { ...app.outdoorUnit };
+  return null;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Pipe completion
+// ════════════════════════════════════════════════════════════════
+function completePipe() {
+  if (app.pipeWIP.length < 2) return;
+  saveHistory();
+  app.pipe   = [...app.pipeWIP];
+  app.pipeWIP = [];
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+  selectTool('select');
+  const r = calculateResults();
+  if (r) {
+    setStatus(`✅ Traccia completata: ${r.meters.toFixed(1)} m — ${r.crossings} pareti attraversate.`);
+  }
+}
+
+function syncCompletePipeBtn() {
+  document.getElementById('complete-pipe-btn').disabled = app.pipeWIP.length < 2;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Tool selection
+// ════════════════════════════════════════════════════════════════
+function selectTool(tool) {
+  // Cancel any in-progress drawing (except pipe: keep WIP if switching back)
+  if (tool !== app.tool) {
+    app.drawStart = null;
+    app.wallStart = null;
+    if (tool !== 'drawPipe') {
+      // Don't discard WIP pipe when user temporarily switches away
+    }
+  }
+  app.tool = tool;
+  document.querySelectorAll('.tool-btn').forEach(btn =>
+    btn.classList.toggle('active', btn.dataset.tool === tool)
+  );
+  updateHint();
+  render();
+}
+
+function updateHint() {
+  const hints = {
+    select:      'Clicca e trascina per spostare elementi',
+    drawRoom:    'Trascina per disegnare una stanza',
+    drawWall:    'Clic punto iniziale, poi clic punto finale',
+    placeIndoor: 'Clic per posizionare lo split interno (❄)',
+    placeOutdoor:'Clic per posizionare l\'unità esterna (🌡)',
+    drawPipe:    'Clicca i punti del percorso — doppio-clic per completare',
+  };
+  document.getElementById('tool-hint').textContent = hints[app.tool] || '';
+}
+
+// ════════════════════════════════════════════════════════════════
+//  UI helpers
+// ════════════════════════════════════════════════════════════════
+function setStatus(msg) {
+  document.getElementById('status-bar').textContent = msg;
+}
+
+function updateMousePos() {
+  const s  = snap(app.mouse.x, app.mouse.y);
+  const mx = ((s.x / GRID) * app.metersPerCell).toFixed(1);
+  const my = ((s.y / GRID) * app.metersPerCell).toFixed(1);
+  document.getElementById('mouse-pos').textContent = `${mx} m, ${my} m`;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  History (undo)
+// ════════════════════════════════════════════════════════════════
+function saveHistory() {
+  const snap = JSON.stringify({
+    rooms:       app.rooms,
+    manualWalls: app.manualWalls,
+    indoorUnit:  app.indoorUnit,
+    outdoorUnit: app.outdoorUnit,
+    pipe:        app.pipe,
+  });
+  app.history.push(snap);
+  if (app.history.length > 40) app.history.shift();
+}
+
+function undo() {
+  if (app.history.length === 0) return;
+  const prev = JSON.parse(app.history.pop());
+  app.rooms       = prev.rooms;
+  app.manualWalls = prev.manualWalls;
+  app.indoorUnit  = prev.indoorUnit;
+  app.outdoorUnit = prev.outdoorUnit;
+  app.pipe        = prev.pipe;
+  app.pipeWIP     = [];
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+  setStatus('Azione annullata.');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Clear actions
+// ════════════════════════════════════════════════════════════════
+function clearPipe() {
+  saveHistory();
+  app.pipe    = [];
+  app.pipeWIP = [];
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+  setStatus('Traccia cancellata.');
+}
+
+function clearAll() {
+  if (!confirm('Cancellare tutto? Anche la cronologia undo verrà eliminata e non sarà possibile recuperare nulla.')) return;
+  app.rooms       = [];
+  app.manualWalls = [];
+  app.indoorUnit  = null;
+  app.outdoorUnit = null;
+  app.pipe        = [];
+  app.pipeWIP     = [];
+  app.history     = [];
+  app.drawStart   = null;
+  app.wallStart   = null;
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+  setStatus('Canvas cancellato.');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Shorthand
+// ════════════════════════════════════════════════════════════════
+const id = s => document.getElementById(s);
+
+// ════════════════════════════════════════════════════════════════
+//  Boot
+// ════════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', init);

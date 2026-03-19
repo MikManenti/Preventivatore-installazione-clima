@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Preventivatore Installazione Climatizzatore</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── Header ─────────────────────────────────────────────── -->
+    <header id="app-header">
+      <div class="header-left">
+        <span class="header-logo">🏠</span>
+        <h1>Preventivatore Installazione Climatizzatore</h1>
+      </div>
+      <div class="header-right">
+        <span id="status-bar">Pronto – scegli un template o inizia a disegnare</span>
+      </div>
+    </header>
+
+    <!-- ── Main layout ─────────────────────────────────────────── -->
+    <div id="main-layout">
+
+      <!-- Left sidebar: tools & templates -->
+      <aside id="left-sidebar">
+
+        <section class="sb-section">
+          <h3>Strumenti</h3>
+          <div id="tools-grid">
+            <button class="tool-btn active" data-tool="select"
+                    title="Seleziona e sposta elementi">
+              <span class="ti">↖</span><span class="tl">Seleziona</span>
+            </button>
+            <button class="tool-btn" data-tool="drawRoom"
+                    title="Trascina per disegnare una stanza">
+              <span class="ti">⬜</span><span class="tl">Stanza</span>
+            </button>
+            <button class="tool-btn" data-tool="drawWall"
+                    title="Clic inizio → clic fine per una parete">
+              <span class="ti">━</span><span class="tl">Parete</span>
+            </button>
+            <button class="tool-btn" data-tool="placeIndoor"
+                    title="Clic per posizionare lo split interno">
+              <span class="ti">❄</span><span class="tl">Split Int.</span>
+            </button>
+            <button class="tool-btn" data-tool="placeOutdoor"
+                    title="Clic per posizionare l'unità esterna">
+              <span class="ti">🌡</span><span class="tl">U. Esterna</span>
+            </button>
+            <button class="tool-btn" data-tool="drawPipe"
+                    title="Clic per aggiungere punti; doppio-clic per completare">
+              <span class="ti">〰</span><span class="tl">Traccia</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="sb-section">
+          <h3>Template planimetrie</h3>
+          <div id="template-btns">
+            <button class="tpl-btn" data-template="studio">Monolocale</button>
+            <button class="tpl-btn" data-template="bilocale">Bilocale</button>
+            <button class="tpl-btn" data-template="trilocale">Trilocale</button>
+            <button class="tpl-btn" data-template="quadrilocale">Quadrilocale</button>
+          </div>
+        </section>
+
+        <section class="sb-section">
+          <h3>Scala</h3>
+          <div class="scale-row">
+            <label>
+              1 cella =
+              <input id="scale-input" type="number"
+                     value="0.5" min="0.1" max="5" step="0.1" />
+              m
+            </label>
+            <small>(1 cella = 20 px)</small>
+          </div>
+        </section>
+
+        <section class="sb-section">
+          <div class="action-btns">
+            <button id="complete-pipe-btn" class="act-btn primary" disabled>
+              ✅ Completa traccia
+            </button>
+            <button id="undo-btn" class="act-btn" title="Ctrl+Z">
+              ↩ Annulla
+            </button>
+            <button id="clear-pipe-btn" class="act-btn">
+              ✂ Cancella traccia
+            </button>
+            <button id="clear-all-btn" class="act-btn danger">
+              🗑 Cancella tutto
+            </button>
+          </div>
+        </section>
+
+      </aside>
+
+      <!-- Centre: canvas + status bar -->
+      <div id="canvas-wrapper">
+        <canvas id="main-canvas"></canvas>
+        <div id="canvas-status">
+          <span id="mouse-pos">0.0 m, 0.0 m</span>
+          <span id="tool-hint"></span>
+        </div>
+      </div>
+
+      <!-- Right sidebar: results & guide -->
+      <aside id="right-sidebar">
+
+        <section class="sb-section results-section">
+          <h3>📐 Risultati calcolo</h3>
+          <div id="results-grid">
+            <div class="res-row">
+              <span class="res-lbl">Lunghezza traccia:</span>
+              <span class="res-val" id="res-length">—</span>
+            </div>
+            <div class="res-row">
+              <span class="res-lbl">Pareti attraversate:</span>
+              <span class="res-val" id="res-walls">—</span>
+            </div>
+            <div class="res-row">
+              <span class="res-lbl">Complessità:</span>
+              <span class="res-val" id="res-complexity">—</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="sb-section">
+          <h3>🎨 Legenda</h3>
+          <div id="legend">
+            <div class="leg-item">
+              <span class="leg-sw wall-sw"></span>Pareti / Stanze
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw indoor-sw"></span>Split interno
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw outdoor-sw"></span>Unità esterna
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw pipe-sw"></span>Traccia tubazione
+            </div>
+          </div>
+        </section>
+
+        <section class="sb-section">
+          <h3>📋 Guida rapida</h3>
+          <ol id="guide">
+            <li>Scegli un template <em>oppure</em> disegna stanze / pareti</li>
+            <li>Usa <strong>Split Int.</strong> per posizionare lo split</li>
+            <li>Usa <strong>U. Esterna</strong> per l'unità esterna</li>
+            <li>Usa <strong>Traccia</strong> e clicca i punti del percorso</li>
+            <li>Doppio-clic (o <em>Completa traccia</em>) per finire</li>
+            <li>Leggi distanza e pareti attraversate qui a destra</li>
+          </ol>
+          <p class="hint-esc">Premi <kbd>Esc</kbd> per annullare l'operazione corrente. <kbd>Ctrl+Z</kbd> per annullare l'ultima azione.</p>
+        </section>
+
+      </aside>
+    </div><!-- /#main-layout -->
+  </div><!-- /#app -->
+
+  <script src="app.js"></script>
+</body>
+</html>
