@@ -10,6 +10,7 @@ const WALL_T    = 3;    // wall stroke thickness
 const PIPE_T    = 2.5;  // pipe stroke thickness
 const HIT_R     = 10;   // hit-test radius (px)
 const SNAP_R    = 8;    // snap-to-unit radius (px)
+const WALL_SNAP_R = 35; // max distance (px) to snap AC units to a wall
 
 // ════════════════════════════════════════════════════════════════
 //  Pre-configured templates  (coordinates in grid cells)
@@ -178,6 +179,15 @@ function snap(x, y) {
   };
 }
 
+/** Force end to be horizontal or vertical relative to start (orthogonal walls). */
+function orthogonalize(start, end) {
+  const dx = end.x - start.x, dy = end.y - start.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return { x: end.x, y: start.y };
+  }
+  return { x: start.x, y: end.y };
+}
+
 // ════════════════════════════════════════════════════════════════
 //  Template loading
 // ════════════════════════════════════════════════════════════════
@@ -266,6 +276,64 @@ function segsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
   return t >= EPS && t <= 1 - EPS && u >= EPS && u <= 1 - EPS;
 }
 
+/** Closest point on segment (x1,y1)-(x2,y2) to point (px,py). Returns {x,y,d}. */
+function closestPointOnSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-10) {
+    const d = dist(px, py, x1, y1);
+    return { x: x1, y: y1, d };
+  }
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+  const cx = x1 + t * dx, cy = y1 + t * dy;
+  return { x: cx, y: cy, d: dist(px, py, cx, cy) };
+}
+
+/** Find the nearest wall segment to a point. Returns {proj, wall, d} or null. */
+function findNearestWall(pt) {
+  const walls = allWalls();
+  let best = null;
+  for (const w of walls) {
+    const res = closestPointOnSegment(pt.x, pt.y, w.x1, w.y1, w.x2, w.y2);
+    if (!best || res.d < best.d) {
+      best = { proj: { x: res.x, y: res.y }, wall: w, d: res.d };
+    }
+  }
+  return best;
+}
+
+/**
+ * Snap an AC unit position to the nearest wall within WALL_SNAP_R.
+ * Returns the snapped {x,y} or null if no wall is close enough.
+ * The unit is placed slightly offset perpendicular to the wall so it
+ * appears "leaning against" it.
+ */
+function snapUnitToWall(rawPt) {
+  const nearest = findNearestWall(rawPt);
+  if (!nearest || nearest.d > WALL_SNAP_R) return null;
+
+  const { wall } = nearest;
+  const dx = wall.x2 - wall.x1, dy = wall.y2 - wall.y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+
+  let offX, offY;
+  if (len < 1e-10) {
+    offX = nearest.proj.x;
+    offY = nearest.proj.y;
+  } else {
+    // Perpendicular unit normal to the wall
+    const nx = -dy / len, ny = dx / len;
+    // Determine which side of the wall the cursor is on
+    const side = (rawPt.x - wall.x1) * nx + (rawPt.y - wall.y1) * ny;
+    const sign = side >= 0 ? 1 : -1;
+    const offset = UNIT_H / 2 + 2; // small visual offset so unit "leans" on wall
+    offX = nearest.proj.x + sign * nx * offset;
+    offY = nearest.proj.y + sign * ny * offset;
+  }
+
+  return snap(offX, offY);
+}
+
 // ════════════════════════════════════════════════════════════════
 //  Calculations
 // ════════════════════════════════════════════════════════════════
@@ -328,6 +396,7 @@ function render() {
 
   drawGrid();
   drawRooms();
+  drawRoomWallLabels();
   drawManualWalls();
   drawPipe();
   drawAcUnits();
@@ -396,6 +465,10 @@ function drawManualWalls() {
     ctx.moveTo(w.x1, w.y1);
     ctx.lineTo(w.x2, w.y2);
     ctx.stroke();
+    // Length label at midpoint
+    const d = dist(w.x1, w.y1, w.x2, w.y2);
+    const m = (d / GRID) * app.metersPerCell;
+    drawWallLenLabel(ctx, m.toFixed(1) + ' m', (w.x1 + w.x2) / 2, (w.y1 + w.y2) / 2);
   }
 }
 
@@ -510,6 +583,35 @@ function drawDistLabel(ctx, text, x, y) {
   ctx.fillText(text, x, y);
 }
 
+/** Draw a wall-length label (dark text, white background). */
+function drawWallLenLabel(ctx, text, x, y) {
+  ctx.font         = 'bold 9px Segoe UI, sans-serif';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = 'rgba(255,255,255,.88)';
+  ctx.fillRect(x - tw / 2 - 2, y - 7, tw + 4, 14);
+  ctx.fillStyle = '#444';
+  ctx.fillText(text, x, y);
+}
+
+/** Draw length labels for all 4 sides of every room, offset outside the room. */
+function drawRoomWallLabels() {
+  const ctx = app.ctx;
+  for (const room of app.rooms) {
+    const sides = [
+      { len: room.w, mx: room.x + room.w / 2,      my: room.y - 11          }, // top
+      { len: room.h, mx: room.x + room.w + 11,      my: room.y + room.h / 2  }, // right
+      { len: room.w, mx: room.x + room.w / 2,      my: room.y + room.h + 11 }, // bottom
+      { len: room.h, mx: room.x - 11,               my: room.y + room.h / 2  }, // left
+    ];
+    for (const side of sides) {
+      const m = (side.len / GRID) * app.metersPerCell;
+      drawWallLenLabel(ctx, m.toFixed(1) + ' m', side.mx, side.my);
+    }
+  }
+}
+
 /* ── In-progress drawing overlays ── */
 function drawInProgress() {
   const ctx = app.ctx;
@@ -544,17 +646,18 @@ function drawInProgress() {
 
   // Wall draw preview
   if (app.tool === 'drawWall' && app.wallStart) {
+    const orthoEnd = orthogonalize(app.wallStart, m);
     ctx.strokeStyle = '#333';
     ctx.lineWidth   = WALL_T;
     ctx.lineCap     = 'round';
     ctx.setLineDash([5, 3]);
     ctx.beginPath();
     ctx.moveTo(app.wallStart.x, app.wallStart.y);
-    ctx.lineTo(m.x, m.y);
+    ctx.lineTo(orthoEnd.x, orthoEnd.y);
     ctx.stroke();
     ctx.setLineDash([]);
     snapDot(ctx, app.wallStart.x, app.wallStart.y);
-    snapDot(ctx, m.x, m.y);
+    snapDot(ctx, orthoEnd.x, orthoEnd.y);
   }
 
   // Pipe WIP
@@ -620,10 +723,11 @@ function onMouseDown(e) {
       if (!app.wallStart) {
         app.wallStart = s;
       } else {
-        if (s.x !== app.wallStart.x || s.y !== app.wallStart.y) {
+        const orthoEnd = orthogonalize(app.wallStart, s);
+        if (orthoEnd.x !== app.wallStart.x || orthoEnd.y !== app.wallStart.y) {
           saveHistory();
           app.manualWalls.push({ x1: app.wallStart.x, y1: app.wallStart.y,
-                                  x2: s.x,             y2: s.y });
+                                  x2: orthoEnd.x,       y2: orthoEnd.y });
           updateResults();
         }
         app.wallStart = null;
@@ -631,19 +735,31 @@ function onMouseDown(e) {
       render();
       break;
 
-    case 'placeIndoor':
+    case 'placeIndoor': {
+      const wallSnap = snapUnitToWall(raw);
+      if (!wallSnap) {
+        setStatus('⚠ Avvicinati a una parete per posizionare lo split interno (❄).');
+        break;
+      }
       saveHistory();
-      app.indoorUnit = { ...s };
+      app.indoorUnit = wallSnap;
       setStatus('Split interno posizionato. Posiziona ora l\'unità esterna.');
       render();
       break;
+    }
 
-    case 'placeOutdoor':
+    case 'placeOutdoor': {
+      const wallSnap = snapUnitToWall(raw);
+      if (!wallSnap) {
+        setStatus('⚠ Avvicinati a una parete per posizionare l\'unità esterna (🌡).');
+        break;
+      }
       saveHistory();
-      app.outdoorUnit = { ...s };
+      app.outdoorUnit = wallSnap;
       setStatus('Unità esterna posizionata. Seleziona "Traccia" per disegnare il percorso.');
       render();
       break;
+    }
 
     case 'drawPipe': {
       // Snap to indoor/outdoor unit if close
@@ -713,7 +829,126 @@ function onDblClick(e) {
   if (app.tool === 'drawPipe' && app.pipeWIP.length >= 2) {
     app.pipeWIP.pop(); // remove duplicate added by second mousedown
     if (app.pipeWIP.length >= 2) completePipe();
+    return;
   }
+
+  if (app.tool === 'select') {
+    const raw = getPos(e);
+
+    // Check manual walls first
+    const wallIdx = manualWallAt(raw.x, raw.y);
+    if (wallIdx >= 0) {
+      editManualWallLength(wallIdx);
+      return;
+    }
+
+    // Check room sides
+    const roomSide = roomSideAt(raw.x, raw.y);
+    if (roomSide) {
+      editRoomSideLength(roomSide.roomIndex, roomSide.side);
+    }
+  }
+}
+
+/** Returns index of the manual wall under (px,py), or -1 if none. */
+function manualWallAt(px, py) {
+  for (let i = 0; i < app.manualWalls.length; i++) {
+    const w = app.manualWalls[i];
+    if (ptNearSeg(px, py, w.x1, w.y1, w.x2, w.y2, HIT_R)) return i;
+  }
+  return -1;
+}
+
+/** Returns {roomIndex, side} for the room side under (px,py), or null. */
+function roomSideAt(px, py) {
+  for (let i = 0; i < app.rooms.length; i++) {
+    const r = app.rooms[i];
+    const sides = [
+      { side: 'top',    x1: r.x,       y1: r.y,       x2: r.x + r.w, y2: r.y       },
+      { side: 'right',  x1: r.x + r.w, y1: r.y,       x2: r.x + r.w, y2: r.y + r.h },
+      { side: 'bottom', x1: r.x,       y1: r.y + r.h, x2: r.x + r.w, y2: r.y + r.h },
+      { side: 'left',   x1: r.x,       y1: r.y,       x2: r.x,       y2: r.y + r.h },
+    ];
+    for (const s of sides) {
+      if (ptNearSeg(px, py, s.x1, s.y1, s.x2, s.y2, HIT_R)) {
+        return { roomIndex: i, side: s.side };
+      }
+    }
+  }
+  return null;
+}
+
+/** Prompt user for new length of a manual wall, resize symmetrically around centre. */
+function editManualWallLength(wallIdx) {
+  const w = app.manualWalls[wallIdx];
+  const d = dist(w.x1, w.y1, w.x2, w.y2);
+  const currentM = (d / GRID) * app.metersPerCell;
+  const input = prompt(
+    `Nuova lunghezza della parete (m):\n(attuale: ${currentM.toFixed(2)} m)`,
+    currentM.toFixed(2)
+  );
+  if (input === null) return;
+  const newM = parseFloat(input);
+  if (!isFinite(newM) || newM <= 0) {
+    alert('Valore non valido. Inserisci una lunghezza positiva in metri.');
+    return;
+  }
+  const newPx = Math.max(GRID, Math.round(newM / app.metersPerCell) * GRID);
+
+  // Direction unit vector
+  const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  const ux = len > 0 ? dx / len : 1, uy = len > 0 ? dy / len : 0;
+
+  // Centre stays fixed; extend symmetrically
+  const cx = (w.x1 + w.x2) / 2, cy = (w.y1 + w.y2) / 2;
+  saveHistory();
+  app.manualWalls[wallIdx] = {
+    x1: Math.round(cx - ux * newPx / 2),
+    y1: Math.round(cy - uy * newPx / 2),
+    x2: Math.round(cx + ux * newPx / 2),
+    y2: Math.round(cy + uy * newPx / 2),
+  };
+  updateResults();
+  render();
+  setStatus(`Parete modificata: ${(newPx / GRID * app.metersPerCell).toFixed(2)} m`);
+}
+
+/**
+ * Prompt user for new length of a room side, resize symmetrically
+ * (centre of the room stays fixed; opposite side moves by the same amount).
+ */
+function editRoomSideLength(roomIdx, side) {
+  const r = app.rooms[roomIdx];
+  const isHoriz = side === 'top' || side === 'bottom';
+  const currentLen = isHoriz ? r.w : r.h;
+  const currentM   = (currentLen / GRID) * app.metersPerCell;
+
+  const input = prompt(
+    `Nuova lunghezza del lato (m):\n(attuale: ${currentM.toFixed(2)} m)`,
+    currentM.toFixed(2)
+  );
+  if (input === null) return;
+  const newM = parseFloat(input);
+  if (!isFinite(newM) || newM <= 0) {
+    alert('Valore non valido. Inserisci una lunghezza positiva in metri.');
+    return;
+  }
+  const newPx = Math.max(GRID * 2, Math.round(newM / app.metersPerCell) * GRID);
+
+  saveHistory();
+  if (isHoriz) {
+    const cx = r.x + r.w / 2;
+    app.rooms[roomIdx].w = newPx;
+    app.rooms[roomIdx].x = Math.round((cx - newPx / 2) / GRID) * GRID;
+  } else {
+    const cy = r.y + r.h / 2;
+    app.rooms[roomIdx].h = newPx;
+    app.rooms[roomIdx].y = Math.round((cy - newPx / 2) / GRID) * GRID;
+  }
+  updateResults();
+  render();
+  setStatus(`Lato stanza modificato: ${(newPx / GRID * app.metersPerCell).toFixed(2)} m`);
 }
 
 function onKeyDown(e) {
@@ -788,8 +1023,18 @@ function moveDrag(pos) {
 
   const s = snap(pos.x - dt.ox, pos.y - dt.oy);
   switch (dt.type) {
-    case 'indoor':  app.indoorUnit  = { x: s.x, y: s.y }; break;
-    case 'outdoor': app.outdoorUnit = { x: s.x, y: s.y }; break;
+    case 'indoor': {
+      const rawTarget = { x: pos.x - dt.ox, y: pos.y - dt.oy };
+      const wallSnap = snapUnitToWall(rawTarget);
+      if (wallSnap) app.indoorUnit = wallSnap;
+      break;
+    }
+    case 'outdoor': {
+      const rawTarget = { x: pos.x - dt.ox, y: pos.y - dt.oy };
+      const wallSnap = snapUnitToWall(rawTarget);
+      if (wallSnap) app.outdoorUnit = wallSnap;
+      break;
+    }
     case 'pipe':    app.pipe[dt.index] = { x: s.x, y: s.y }; break;
     case 'room': {
       app.rooms[dt.index].x = s.x;
@@ -866,11 +1111,11 @@ function selectTool(tool) {
 
 function updateHint() {
   const hints = {
-    select:      'Clicca e trascina per spostare elementi',
+    select:      'Clicca e trascina per spostare; doppio-clic su parete/lato stanza per modificare lunghezza',
     drawRoom:    'Trascina per disegnare una stanza',
-    drawWall:    'Clic punto iniziale, poi clic punto finale',
-    placeIndoor: 'Clic per posizionare lo split interno (❄)',
-    placeOutdoor:'Clic per posizionare l\'unità esterna (🌡)',
+    drawWall:    'Clic punto iniziale, poi clic punto finale (solo ortogonale)',
+    placeIndoor: 'Clic vicino a una parete per posizionare lo split interno (❄)',
+    placeOutdoor:'Clic vicino a una parete per posizionare l\'unità esterna (🌡)',
     drawPipe:    'Clicca i punti del percorso — doppio-clic per completare',
   };
   document.getElementById('tool-hint').textContent = hints[app.tool] || '';
