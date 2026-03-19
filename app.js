@@ -842,10 +842,17 @@ function onDblClick(e) {
       return;
     }
 
-    // Check room sides
+    // Check room sides (precise border click → edit one dimension)
     const roomSide = roomSideAt(raw.x, raw.y);
     if (roomSide) {
       editRoomSideLength(roomSide.roomIndex, roomSide.side);
+      return;
+    }
+
+    // Check room interior (click inside room → edit both dimensions)
+    const roomIdx = roomAt(raw.x, raw.y);
+    if (roomIdx >= 0) {
+      editRoomDimensions(roomIdx);
     }
   }
 }
@@ -876,6 +883,15 @@ function roomSideAt(px, py) {
     }
   }
   return null;
+}
+
+/** Returns index of room whose interior contains (px,py), or -1 if none. */
+function roomAt(px, py) {
+  for (let i = app.rooms.length - 1; i >= 0; i--) {
+    const r = app.rooms[i];
+    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return i;
+  }
+  return -1;
 }
 
 /** Prompt user for new length of a manual wall, resize symmetrically around centre. */
@@ -949,6 +965,51 @@ function editRoomSideLength(roomIdx, side) {
   updateResults();
   render();
   setStatus(`Lato stanza modificato: ${(newPx / GRID * app.metersPerCell).toFixed(2)} m`);
+}
+
+/**
+ * Prompt user for new width and height of a room (centre stays fixed).
+ */
+function editRoomDimensions(roomIdx) {
+  const r = app.rooms[roomIdx];
+  const currentW = (r.w / GRID) * app.metersPerCell;
+  const currentH = (r.h / GRID) * app.metersPerCell;
+
+  const wInput = prompt(
+    `Larghezza stanza "${r.label}" (m):\n(attuale: ${currentW.toFixed(2)} m)`,
+    currentW.toFixed(2)
+  );
+  if (wInput === null) return;
+  const newW = parseFloat(wInput);
+  if (!isFinite(newW) || newW <= 0) {
+    alert('Valore non valido. Inserisci una larghezza positiva in metri.');
+    return;
+  }
+
+  const hInput = prompt(
+    `Profondità stanza "${r.label}" (m):\n(attuale: ${currentH.toFixed(2)} m)`,
+    currentH.toFixed(2)
+  );
+  if (hInput === null) return;
+  const newH = parseFloat(hInput);
+  if (!isFinite(newH) || newH <= 0) {
+    alert('Valore non valido. Inserisci una profondità positiva in metri.');
+    return;
+  }
+
+  const newPxW = Math.max(GRID * 2, Math.round(newW / app.metersPerCell) * GRID);
+  const newPxH = Math.max(GRID * 2, Math.round(newH / app.metersPerCell) * GRID);
+
+  saveHistory();
+  const cx = r.x + r.w / 2;
+  const cy = r.y + r.h / 2;
+  app.rooms[roomIdx].w = newPxW;
+  app.rooms[roomIdx].h = newPxH;
+  app.rooms[roomIdx].x = Math.round((cx - newPxW / 2) / GRID) * GRID;
+  app.rooms[roomIdx].y = Math.round((cy - newPxH / 2) / GRID) * GRID;
+  updateResults();
+  render();
+  setStatus(`Stanza ridimensionata: ${(newPxW / GRID * app.metersPerCell).toFixed(2)} m × ${(newPxH / GRID * app.metersPerCell).toFixed(2)} m`);
 }
 
 function onKeyDown(e) {
