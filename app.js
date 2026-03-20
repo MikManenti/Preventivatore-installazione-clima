@@ -124,7 +124,7 @@ const app = {
   // Scale
   metersPerCell: 0.5,
 
-  // Mouse position (world pixels)
+  // Mouse position (world coordinates)
   mouse: { x: 0, y: 0 },
 
   // Zoom / pan
@@ -1981,7 +1981,9 @@ function updateHeightUI() {
     const label = document.createElement('label');
     label.className = 'height-item';
     const val = (app.indoorHeights && app.indoorHeights[i] != null) ? app.indoorHeights[i] : 0;
-    label.innerHTML = `INT.${i+1}: <input type="number" min="0" max="10" step="0.1" value="${val}"> m`;
+    const inputId = `height-indoor-${i}`;
+    label.htmlFor = inputId;
+    label.innerHTML = `INT.${i+1}: <input id="${inputId}" type="number" min="0" max="10" step="0.1" value="${val}"> m`;
     const input = label.querySelector('input');
     input.addEventListener('change', () => {
       if (!app.indoorHeights) app.indoorHeights = [];
@@ -1995,7 +1997,8 @@ function updateHeightUI() {
   const labelOut = document.createElement('label');
   labelOut.className = 'height-item';
   const outVal = app.outdoorHeight || 0;
-  labelOut.innerHTML = `U.EST.: <input type="number" min="0" max="10" step="0.1" value="${outVal}"> m`;
+  labelOut.htmlFor = 'height-outdoor';
+  labelOut.innerHTML = `U.EST.: <input id="height-outdoor" type="number" min="0" max="10" step="0.1" value="${outVal}"> m`;
   const outInput = labelOut.querySelector('input');
   outInput.addEventListener('change', () => {
     app.outdoorHeight = parseFloat(outInput.value) || 0;
