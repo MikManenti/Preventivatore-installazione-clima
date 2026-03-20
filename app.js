@@ -1521,9 +1521,9 @@ function undo() {
   const prev = JSON.parse(app.history.pop());
   app.rooms         = prev.rooms;
   app.manualWalls   = prev.manualWalls;
-  app.indoorUnits   = prev.indoorUnits   || [null];
-  app.outdoorUnit   = prev.outdoorUnit;
-  app.pipes         = prev.pipes         || [[]];
+  app.indoorUnits   = prev.indoorUnits   ?? [null];
+  app.outdoorUnit   = prev.outdoorUnit   ?? null;
+  app.pipes         = prev.pipes         ?? [[]];
   app.splitType     = prev.splitType     ?? 1;
   app.activePipeIdx = prev.activePipeIdx ?? 0;
   app.pipeWIP       = [];
@@ -1587,7 +1587,7 @@ function setSplitType(n) {
 
 function setActivePipe(idx) {
   if (idx < 0 || idx >= app.splitType) return;
-  // Discard in-progress WIP silently when switching traces
+  // Discard WIP silently when switching traces
   app.pipeWIP = [];
   syncCompletePipeBtn();
   app.activePipeIdx = idx;
