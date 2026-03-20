@@ -25,6 +25,9 @@ const POWER_DARK     = '#BF360C';
 const CONDENSA_COLOR = '#00BCD4';
 const CONDENSA_DARK  = '#006064';
 
+// Keys for the materials/works checklist (used in init, undo, clearAll)
+const MATERIALS_KEYS = ['staffaUE', 'lavaggioImpianto', 'predisposizione'];
+
 // ════════════════════════════════════════════════════════════════
 //  Pre-configured templates  (coordinates in grid cells)
 // ════════════════════════════════════════════════════════════════
@@ -208,7 +211,7 @@ function init() {
   });
 
   // Materials checkboxes
-  ['staffaUE', 'lavaggioImpianto', 'predisposizione'].forEach(key => {
+  MATERIALS_KEYS.forEach(key => {
     const el = document.getElementById('mat-' + key);
     if (el) el.addEventListener('change', e => { app.materials[key] = e.target.checked; });
   });
@@ -1825,7 +1828,7 @@ function undo() {
   app.condensatePipe = prev.condensatePipe ?? [];
   if (prev.materials) {
     app.materials = prev.materials;
-    ['staffaUE', 'lavaggioImpianto', 'predisposizione'].forEach(key => {
+    MATERIALS_KEYS.forEach(key => {
       const el = document.getElementById('mat-' + key);
       if (el) el.checked = app.materials[key] || false;
     });
@@ -1881,7 +1884,7 @@ function clearAll() {
   app.splitType     = 1;
   app.activePipeIdx = 0;
   app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
-  ['staffaUE', 'lavaggioImpianto', 'predisposizione'].forEach(key => {
+  MATERIALS_KEYS.forEach(key => {
     const el = document.getElementById('mat-' + key);
     if (el) el.checked = false;
   });
