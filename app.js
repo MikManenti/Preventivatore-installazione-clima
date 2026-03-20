@@ -987,8 +987,8 @@ function computePipeRenderOffsets() {
   const ANGLE_TOL  = 0.08;        // |sin angle| threshold (≈ 4.6°)
   const DIST_TOL   = GRID / 2;    // max perpendicular distance (px)
   const OVERLAP_MIN = GRID;       // min projection overlap (px)
-  const SIDE_GAP   = PIPE_T + 4; // center-to-center lateral spacing between parallel traces (px)
-                                  // = pipe width (4.5) + 4 px gap between pipe edges
+  const SIDE_GAP   = PIPE_T; // center-to-center lateral spacing between parallel traces (px)
+                             // = pipe width (4.5) so adjacent traces touch with no gap
 
   // ── build flat segment list ───────────────────────────────────────
   const segs = [];
@@ -1112,7 +1112,7 @@ function drawPipe() {
       for (let j = 1; j < pts.length; j++) {
         const d = dist(pts[j-1].x, pts[j-1].y, pts[j].x, pts[j].y);
         const m = (d / GRID) * app.metersPerCell;
-        if (m >= 0.1) {
+        if (m >= 1) {
           const mx = (pts[j-1].x + pts[j].x) / 2;
           const my = (pts[j-1].y + pts[j].y) / 2;
           const sdx = pts[j].x - pts[j-1].x;
@@ -1166,9 +1166,6 @@ function drawDistLabel(ctx, text, x, y, fgColor, segDx, segDy) {
   ctx.font         = 'bold 9px Segoe UI, sans-serif';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
-  const tw = ctx.measureText(text).width;
-  ctx.fillStyle = 'rgba(255,255,255,.85)';
-  ctx.fillRect(lx - tw / 2 - 2, ly - 7, tw + 4, 14);
   ctx.fillStyle = fgColor;
   ctx.fillText(text, lx, ly);
 }
