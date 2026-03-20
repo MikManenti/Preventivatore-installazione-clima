@@ -360,6 +360,76 @@ function segsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
   return t >= EPS && t <= 1 - EPS && u >= EPS && u <= 1 - EPS;
 }
 
+/**
+ * Returns the exact intersection point {x, y} of two segments.
+ * Pre-condition: segsIntersect() returned true for these segments.
+ */
+function segIntersectionPoint(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
+  const dx1 = ax2 - ax1, dy1 = ay2 - ay1;
+  const dx2 = bx2 - bx1, dy2 = by2 - by1;
+  const denom = dx1 * dy2 - dy1 * dx2;
+  const ex = bx1 - ax1, ey = by1 - ay1;
+  const t = (ex * dy2 - ey * dx2) / denom;
+  return { x: ax1 + t * dx1, y: ay1 + t * dy1 };
+}
+
+/**
+ * Append crossing points from a single pipe into an existing `pts` array,
+ * deduplicating within GRID/2 px. Shared by counting and drawing helpers.
+ */
+function _addPipeCrossings(pipe, walls, pts) {
+  if (!pipe || pipe.length < 2) return;
+  for (let j = 1; j < pipe.length; j++) {
+    const { x: ax1, y: ay1 } = pipe[j - 1];
+    const { x: ax2, y: ay2 } = pipe[j];
+    for (const w of walls) {
+      if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2)) {
+        const pt = segIntersectionPoint(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2);
+        if (!pts.some(p => dist(p.x, p.y, pt.x, pt.y) < GRID / 2))
+          pts.push(pt);
+      }
+    }
+  }
+}
+
+/**
+ * Count unique wall crossings for a single pipe path.
+ * Two intersections within GRID/2 px are merged into one hole,
+ * preventing overlapping collinear room-wall segments from being
+ * counted as multiple holes at the same physical location.
+ */
+function countUniqueCrossings(pipe, walls) {
+  const pts = [];
+  _addPipeCrossings(pipe, walls, pts);
+  return pts.length;
+}
+
+/**
+ * Count unique wall crossings across multiple pipe paths (for multi-split).
+ * Crossing points from different pipes that are within GRID/2 px of each
+ * other are merged into one hole (same physical location in the wall).
+ */
+function countUnifiedCrossings(pipes, walls) {
+  const pts = [];
+  for (const pipe of pipes) _addPipeCrossings(pipe, walls, pts);
+  return pts.length;
+}
+
+/**
+ * Collect all unique wall-drilling points from every active pipe
+ * (refrigerant traces T1-T3, power line, condensate line).
+ * Points closer than GRID/2 px to an existing entry are merged into one.
+ * Returns [{x, y}, ...].
+ */
+function collectDrillingPoints() {
+  const walls = allWalls();
+  const pts = [];
+  for (let i = 0; i < app.splitType; i++) _addPipeCrossings(app.pipes[i], walls, pts);
+  _addPipeCrossings(app.powerPipe,      walls, pts);
+  _addPipeCrossings(app.condensatePipe, walls, pts);
+  return pts;
+}
+
 /** Closest point on segment (x1,y1)-(x2,y2) to point (px,py). Returns {x,y,d}. */
 function closestPointOnSegment(px, py, x1, y1, x2, y2) {
   const dx = x2 - x1, dy = y2 - y1;
@@ -483,16 +553,8 @@ function calculateResults() {
       px += dist(pipe[j-1].x, pipe[j-1].y, pipe[j].x, pipe[j].y);
     const meters = (px / GRID) * app.metersPerCell;
 
-    // Wall crossings
-    let crossings = 0;
-    for (let j = 1; j < pipe.length; j++) {
-      const { x: ax1, y: ay1 } = pipe[j-1];
-      const { x: ax2, y: ay2 } = pipe[j];
-      for (const w of walls) {
-        if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2))
-          crossings++;
-      }
-    }
+    // Wall crossings (deduplicated: overlapping walls at the same location count as one hole)
+    const crossings = countUniqueCrossings(pipe, walls);
 
     const iH = (app.indoorHeights && app.indoorHeights[i]) ? app.indoorHeights[i] : 0;
     const oH = app.outdoorHeight || 0;
@@ -513,12 +575,13 @@ function complexityLabel(crossingCount) {
 
 function updateResults() {
   const results = calculateResults();
+  const walls = allWalls();
   const container = document.getElementById('results-per-trace');
   if (!container) return;
 
   container.innerHTML = '';
-  let totalCrossings = 0;
   let hasAny = false;
+  const isMulti = app.splitType > 1;
 
   for (let i = 0; i < app.splitType; i++) {
     const r = results[i];
@@ -527,10 +590,10 @@ function updateResults() {
     row.className = 'res-row';
     if (r) {
       hasAny = true;
-      totalCrossings += r.crossings;
       let val = r.totalMeters.toFixed(1) + ' m';
       if (r.heightDiff > 0) val += ` (Δh ${r.heightDiff.toFixed(1)} m)`;
-      val += ` | ${r.crossings} par.`;
+      // For multi-split: per-trace hole counts are not shown (unified count shown below)
+      if (!isMulti) val += ` | ${r.crossings} par.`;
       row.innerHTML =
         `<span class="res-lbl" style="color:${color};font-weight:700">T${i+1}:</span>` +
         `<span class="res-val">${val}</span>`;
@@ -540,6 +603,24 @@ function updateResults() {
         `<span class="res-val" style="color:#aaa">—</span>`;
     }
     container.appendChild(row);
+  }
+
+  // Unified hole count for multi-split: collect crossing points across ALL active pipes
+  // and deduplicate so that pipes passing through the same wall location count as one hole.
+  let totalCrossings = 0;
+  if (isMulti && hasAny) {
+    const activePipes = [];
+    for (let i = 0; i < app.splitType; i++) {
+      if (results[i]) activePipes.push(app.pipes[i] || []);
+    }
+    totalCrossings = countUnifiedCrossings(activePipes, walls);
+    const row = document.createElement('div');
+    row.className = 'res-row';
+    row.innerHTML = `<span class="res-lbl" style="font-weight:700">🔩 Fori:</span>` +
+      `<span class="res-val">${totalCrossings} par.</span>`;
+    container.appendChild(row);
+  } else if (!isMulti && results[0]) {
+    totalCrossings = results[0].crossings;
   }
 
   const pcResults = calculatePowerCondensaResults();
@@ -590,6 +671,7 @@ function render() {
   drawManualWalls();
   drawPipe();
   drawPowerCondensaPipes();
+  drawDrillingPoints();
   drawAcUnits();
   drawSpecialUnits();
   drawInProgress();
@@ -778,6 +860,61 @@ function roundRect(ctx, x, y, w, h, r) {
     ctx.quadraticCurveTo(x, y,         x + r, y);
     ctx.closePath();
   }
+}
+
+/* ── Drilling-point markers (red circles on walls) ── */
+function drawDrillingPoints() {
+  const ctx = app.ctx;
+  const pts = collectDrillingPoints();
+  if (pts.length === 0) return;
+
+  const R      = 8;    // outer circle radius (px)
+  const R_FILL = 6;    // inner fill radius (px)
+
+  pts.forEach((pt, idx) => {
+    // Outer white halo (improves visibility on dark walls)
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, R + 2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fill();
+
+    // Red fill
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, R_FILL, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(220,30,30,0.25)';
+    ctx.fill();
+
+    // Red stroke circle
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, R, 0, Math.PI * 2);
+    ctx.strokeStyle = '#CC0000';
+    ctx.lineWidth   = 1.8;
+    ctx.stroke();
+
+    // Cross-hair lines inside circle
+    ctx.strokeStyle = '#CC0000';
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pt.x - R + 3, pt.y);
+    ctx.lineTo(pt.x + R - 3, pt.y);
+    ctx.moveTo(pt.x, pt.y - R + 3);
+    ctx.lineTo(pt.x, pt.y + R - 3);
+    ctx.stroke();
+
+    // Hole number badge (1-indexed)
+    const label = String(idx + 1);
+    ctx.font         = 'bold 10px Segoe UI, sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(label).width;
+    const bx = pt.x + R + 1;
+    const by = pt.y - R - 1;
+    ctx.fillStyle = '#CC0000';
+    roundRect(ctx, bx - tw / 2 - 2, by - 5, tw + 4, 10, 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, bx, by);
+  });
 }
 
 /* ── Completed pipes (all active splits) ── */
@@ -2076,12 +2213,7 @@ function calculatePowerCondensaResults() {
     for (let j = 1; j < pipe.length; j++)
       px += dist(pipe[j-1].x, pipe[j-1].y, pipe[j].x, pipe[j].y);
     const meters = (px / GRID) * app.metersPerCell;
-    let crossings = 0;
-    for (let j = 1; j < pipe.length; j++) {
-      const { x: ax1, y: ay1 } = pipe[j-1], { x: ax2, y: ay2 } = pipe[j];
-      for (const w of walls)
-        if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2)) crossings++;
-    }
+    const crossings = countUniqueCrossings(pipe, walls);
     return { meters, crossings };
   };
   return { power: calc(app.powerPipe), condensa: calc(app.condensatePipe) };
