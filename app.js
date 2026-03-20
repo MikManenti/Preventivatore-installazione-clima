@@ -278,16 +278,16 @@ function loadTemplate(name) {
   app.outdoorUnit  = null;
   app.indoorHeights = [0];
   app.outdoorHeight = 0;
-  app.pipes        = [[]];
-  app.pipeWIP      = [];
-  app.powerOutlet      = null;
-  app.condensateDrain  = null;
-  app.powerPipe        = [];
-  app.condensatePipe   = [];
-  app.powerPipeWIP     = [];
+  app.pipes             = [[]];
+  app.pipeWIP           = [];
+  app.powerOutlet       = null;
+  app.condensateDrain   = null;
+  app.powerPipe         = [];
+  app.condensatePipe    = [];
+  app.powerPipeWIP      = [];
   app.condensatePipeWIP = [];
-  app.splitType    = 1;
-  app.activePipeIdx = 0;
+  app.splitType         = 1;
+  app.activePipeIdx     = 0;
 
   render();
   updateResults();
@@ -1796,7 +1796,7 @@ function saveHistory() {
     activePipeIdx:  app.activePipeIdx,
     materials:      app.materials,
     powerOutlet:    app.powerOutlet,
-    condensateDrain:app.condensateDrain,
+    condensateDrain: app.condensateDrain,
     powerPipe:      app.powerPipe,
     condensatePipe: app.condensatePipe,
   });
@@ -1820,7 +1820,7 @@ function undo() {
   app.powerPipeWIP  = [];
   app.condensatePipeWIP = [];
   app.powerOutlet    = prev.powerOutlet    ?? null;
-  app.condensateDrain= prev.condensateDrain?? null;
+  app.condensateDrain  = prev.condensateDrain ?? null;
   app.powerPipe      = prev.powerPipe      ?? [];
   app.condensatePipe = prev.condensatePipe ?? [];
   if (prev.materials) {
@@ -1868,14 +1868,14 @@ function clearAll() {
   app.indoorHeights = [0];
   app.outdoorHeight = 0;
   app.pipes         = [[]];
-  app.pipeWIP       = [];
-  app.powerOutlet      = null;
-  app.condensateDrain  = null;
-  app.powerPipe        = [];
-  app.condensatePipe   = [];
-  app.powerPipeWIP     = [];
+  app.pipeWIP           = [];
+  app.powerOutlet       = null;
+  app.condensateDrain   = null;
+  app.powerPipe         = [];
+  app.condensatePipe    = [];
+  app.powerPipeWIP      = [];
   app.condensatePipeWIP = [];
-  app.history       = [];
+  app.history           = [];
   app.drawStart     = null;
   app.wallStart     = null;
   app.splitType     = 1;
