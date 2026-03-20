@@ -4,15 +4,19 @@
 //  Constants
 // ════════════════════════════════════════════════════════════════
 const GRID      = 20;   // pixels per grid cell
-const UNIT_W    = 32;   // AC-unit icon width  (px)
+const UNIT_W    = 37;   // AC-unit icon width  (px)
 const UNIT_H    = 22;   // AC-unit icon height (px)
 const WALL_T    = 10;   // wall stroke thickness
 const WALL_FACE = 2;    // black face width on each side of wall (px)
-const PIPE_T    = 2.5;  // pipe stroke thickness
+const PIPE_T    = 4.5;  // pipe stroke thickness
 const HIT_R     = 10;   // hit-test radius (px)
 const SNAP_R    = 8;    // snap-to-unit radius (px)
 const WALL_SNAP_R    = 35; // max distance (px) to snap AC units / pipe points to a wall
 const RESIZE_HANDLE_R = 8; // hit radius for room resize handles (px)
+const LABEL_HIT_MARGIN   = 4;   // extra margin beyond UNIT_W/2 for speech-bubble hit testing (px)
+const DIST_LABEL_OFFSET  = 14;  // perpendicular offset (px) for per-segment distance labels
+const DEFAULT_LABEL_OX   = 0;   // default horizontal offset of speech-bubble label from anchor (px)
+const DEFAULT_LABEL_OY   = -50; // default vertical offset of speech-bubble label from anchor (px)
 
 // Colours for up to 3 independent traces / indoor units
 const PIPE_COLORS    = ['#E91E63', '#FF9800', '#9C27B0']; // magenta · orange · purple
@@ -987,7 +991,9 @@ function drawPipe() {
         if (m >= 0.1) {
           const mx = (pts[j-1].x + pts[j].x) / 2;
           const my = (pts[j-1].y + pts[j].y) / 2;
-          drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, darkColor);
+          const sdx = pts[j].x - pts[j-1].x;
+          const sdy = pts[j].y - pts[j-1].y;
+          drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, darkColor, sdx, sdy);
         }
       }
     }
@@ -1020,16 +1026,27 @@ function drawTraceLabel(ctx, text, x, y, color) {
   ctx.fillText(text, x, y - 10);
 }
 
-function drawDistLabel(ctx, text, x, y, fgColor) {
+function drawDistLabel(ctx, text, x, y, fgColor, segDx, segDy) {
   fgColor = fgColor || '#880E4F';
+  // Offset the label perpendicular to the segment so it doesn't overlap the line
+  let ox = 0, oy = 0;
+  if (segDx !== undefined && segDy !== undefined) {
+    const len = Math.sqrt(segDx * segDx + segDy * segDy);
+    if (len > 0) {
+      // Perpendicular CCW: (-segDy, segDx) normalised × DIST_LABEL_OFFSET px
+      ox = (-segDy / len) * DIST_LABEL_OFFSET;
+      oy = ( segDx / len) * DIST_LABEL_OFFSET;
+    }
+  }
+  const lx = x + ox, ly = y + oy;
   ctx.font         = 'bold 9px Segoe UI, sans-serif';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   const tw = ctx.measureText(text).width;
   ctx.fillStyle = 'rgba(255,255,255,.85)';
-  ctx.fillRect(x - tw / 2 - 2, y - 7, tw + 4, 14);
+  ctx.fillRect(lx - tw / 2 - 2, ly - 7, tw + 4, 14);
   ctx.fillStyle = fgColor;
-  ctx.fillText(text, x, y);
+  ctx.fillText(text, lx, ly);
 }
 
 /** Draw a wall-length label (dark text, white background). */
@@ -1433,7 +1450,7 @@ function onMouseDown(e) {
       const wallSnap = snapUnitToWall(raw);
       if (!wallSnap) { setStatus('⚠ Avvicinati a una parete per posizionare la presa di corrente.'); break; }
       saveHistory();
-      app.powerOutlet = wallSnap;
+      app.powerOutlet = { ...wallSnap, labelOx: DEFAULT_LABEL_OX, labelOy: DEFAULT_LABEL_OY };
       setStatus('🔌 Presa di corrente posizionata.');
       render();
       break;
@@ -1443,7 +1460,7 @@ function onMouseDown(e) {
       const wallSnap = snapUnitToWall(raw);
       if (!wallSnap) { setStatus('⚠ Avvicinati a una parete per posizionare lo scarico condensa.'); break; }
       saveHistory();
-      app.condensateDrain = wallSnap;
+      app.condensateDrain = { ...wallSnap, labelOx: DEFAULT_LABEL_OX, labelOy: DEFAULT_LABEL_OY };
       setStatus('💧 Scarico condensa posizionato.');
       render();
       break;
@@ -1536,6 +1553,21 @@ function updateSelectCursor(pos) {
     const map = { top: 'ns-resize', bottom: 'ns-resize', left: 'ew-resize', right: 'ew-resize' };
     app.canvas.style.cursor = map[app.dragTarget.side] || 'default';
     return;
+  }
+  // Hover over outlet/drain label boxes
+  if (app.powerOutlet) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    if (dist(pos.x, pos.y, x + labelOx, y + labelOy) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.canvas.style.cursor = 'move';
+      return;
+    }
+  }
+  if (app.condensateDrain) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    if (dist(pos.x, pos.y, x + labelOx, y + labelOy) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.canvas.style.cursor = 'move';
+      return;
+    }
   }
   // Hover over resize handle
   for (const room of app.rooms) {
@@ -1875,7 +1907,7 @@ function startDrag(pos) {
   // Indoor units (all slots)
   for (let i = 0; i < app.splitType; i++) {
     const unit = app.indoorUnits[i];
-    if (unit && dist(pos.x, pos.y, unit.x, unit.y) <= UNIT_W / 2 + 4) {
+    if (unit && dist(pos.x, pos.y, unit.x, unit.y) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
       app.dragTarget = { type: 'indoor', index: i,
                           ox: pos.x - unit.x, oy: pos.y - unit.y };
       return;
@@ -1883,10 +1915,28 @@ function startDrag(pos) {
   }
   // Outdoor unit
   if (app.outdoorUnit &&
-      dist(pos.x, pos.y, app.outdoorUnit.x, app.outdoorUnit.y) <= UNIT_W / 2 + 4) {
+      dist(pos.x, pos.y, app.outdoorUnit.x, app.outdoorUnit.y) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
     app.dragTarget = { type: 'outdoor', ox: pos.x - app.outdoorUnit.x,
                                          oy: pos.y - app.outdoorUnit.y };
     return;
+  }
+  // Power outlet label box
+  if (app.powerOutlet) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    const lx = x + labelOx, ly = y + labelOy;
+    if (dist(pos.x, pos.y, lx, ly) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.dragTarget = { type: 'outletLabel', ox: pos.x - lx, oy: pos.y - ly };
+      return;
+    }
+  }
+  // Condensate drain label box
+  if (app.condensateDrain) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    const lx = x + labelOx, ly = y + labelOy;
+    if (dist(pos.x, pos.y, lx, ly) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.dragTarget = { type: 'drainLabel', ox: pos.x - lx, oy: pos.y - ly };
+      return;
+    }
   }
   // Pipe waypoints (all splits)
   for (let pi = 0; pi < app.splitType; pi++) {
@@ -1966,6 +2016,20 @@ function moveDrag(pos) {
       break;
     }
     case 'pipe':    app.pipes[dt.pipeIdx][dt.index] = { x: s.x, y: s.y }; break;
+    case 'outletLabel': {
+      if (app.powerOutlet) {
+        app.powerOutlet.labelOx = pos.x - dt.ox - app.powerOutlet.x;
+        app.powerOutlet.labelOy = pos.y - dt.oy - app.powerOutlet.y;
+      }
+      break;
+    }
+    case 'drainLabel': {
+      if (app.condensateDrain) {
+        app.condensateDrain.labelOx = pos.x - dt.ox - app.condensateDrain.x;
+        app.condensateDrain.labelOy = pos.y - dt.oy - app.condensateDrain.y;
+      }
+      break;
+    }
     case 'room': {
       app.rooms[dt.index].x = s.x;
       app.rooms[dt.index].y = s.y;
@@ -2016,6 +2080,16 @@ function origPos(dt) {
     case 'pipe':    {
       const pipe = app.pipes[dt.pipeIdx];
       return pipe && pipe[dt.index] ? { ...pipe[dt.index] } : null;
+    }
+    case 'outletLabel': {
+      if (!app.powerOutlet) return null;
+      const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+      return { x: x + labelOx, y: y + labelOy };
+    }
+    case 'drainLabel': {
+      if (!app.condensateDrain) return null;
+      const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+      return { x: x + labelOx, y: y + labelOy };
     }
     case 'room':    return app.rooms[dt.index]
                            ? { x: app.rooms[dt.index].x, y: app.rooms[dt.index].y }
@@ -2411,8 +2485,35 @@ function drawSpecialUnits() {
   const hw = UNIT_W / 2, hh = UNIT_H / 2;
 
   if (app.powerOutlet) {
-    const { x, y, angle = 0 } = app.powerOutlet;
-    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    const { x, y, angle = 0, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    const lx = x + labelOx, ly = y + labelOy;
+
+    // Anchor marker at wall position
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = POWER_COLOR;
+    ctx.strokeStyle = POWER_DARK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Connecting line from anchor to label
+    ctx.strokeStyle = POWER_DARK;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(lx, ly);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label box (speech bubble)
+    ctx.save();
+    ctx.translate(lx, ly);
     drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, POWER_COLOR, POWER_DARK);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 7px Segoe UI, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -2421,8 +2522,35 @@ function drawSpecialUnits() {
   }
 
   if (app.condensateDrain) {
-    const { x, y, angle = 0 } = app.condensateDrain;
-    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    const { x, y, angle = 0, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    const lx = x + labelOx, ly = y + labelOy;
+
+    // Anchor marker at wall position
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = CONDENSA_COLOR;
+    ctx.strokeStyle = CONDENSA_DARK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Connecting line from anchor to label
+    ctx.strokeStyle = CONDENSA_DARK;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(lx, ly);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label box (speech bubble)
+    ctx.save();
+    ctx.translate(lx, ly);
     drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, CONDENSA_COLOR, CONDENSA_DARK);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 7px Segoe UI, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -2449,7 +2577,9 @@ function drawPowerCondensaPipes() {
       if (m >= 0.1) {
         const mx = (toDraw[j-1].x + toDraw[j].x) / 2;
         const my = (toDraw[j-1].y + toDraw[j].y) / 2;
-        drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, dark);
+        const sdx = toDraw[j].x - toDraw[j-1].x;
+        const sdy = toDraw[j].y - toDraw[j-1].y;
+        drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, dark, sdx, sdy);
       }
     }
     for (const pt of toDraw) pipeDot(ctx, pt.x, pt.y, color);
