@@ -105,6 +105,7 @@ const app = {
 
   // Power & condensate lines
   powerOutlet:       null,
+  outletHeight:      0,
   condensateDrain:   null,
   powerPipe:         [],
   condensatePipe:    [],
@@ -284,6 +285,7 @@ function loadTemplate(name) {
   app.pipes             = [[]];
   app.pipeWIP           = [];
   app.powerOutlet       = null;
+  app.outletHeight      = 0;
   app.condensateDrain   = null;
   app.powerPipe         = [];
   app.condensatePipe    = [];
@@ -627,8 +629,11 @@ function updateResults() {
   if (pcResults.power) {
     const row = document.createElement('div');
     row.className = 'res-row';
+    let powerVal = (pcResults.power.totalMeters ?? pcResults.power.meters).toFixed(1) + ' m';
+    if (pcResults.power.heightDiff > 0) powerVal += ` (Δh ${pcResults.power.heightDiff.toFixed(1)} m)`;
+    powerVal += ` | ${pcResults.power.crossings} par.`;
     row.innerHTML = `<span class="res-lbl" style="color:${POWER_COLOR};font-weight:700">⚡ Corr.:</span>` +
-      `<span class="res-val">${pcResults.power.meters.toFixed(1)} m | ${pcResults.power.crossings} par.</span>`;
+      `<span class="res-val">${powerVal}</span>`;
     container.appendChild(row);
     hasAny = true;
     totalCrossings += pcResults.power.crossings;
@@ -1830,7 +1835,7 @@ function completePipe() {
     syncCompletePipeBtn(); render(); updateResults();
     selectTool('select');
     const r = calculatePowerCondensaResults();
-    setStatus(`✅ Traccia corrente completata: ${r.power ? r.power.meters.toFixed(1) + ' m — ' + r.power.crossings + ' pareti' : '—'}`);
+    setStatus(`✅ Traccia corrente completata: ${r.power ? (r.power.totalMeters ?? r.power.meters).toFixed(1) + ' m — ' + r.power.crossings + ' pareti' : '—'}`);
     return;
   }
   if (tool === 'drawCondensaPipe') {
@@ -1936,6 +1941,7 @@ function saveHistory() {
     activePipeIdx:  app.activePipeIdx,
     materials:      app.materials,
     powerOutlet:    app.powerOutlet,
+    outletHeight:   app.outletHeight,
     condensateDrain: app.condensateDrain,
     powerPipe:      app.powerPipe,
     condensatePipe: app.condensatePipe,
@@ -1960,6 +1966,7 @@ function undo() {
   app.powerPipeWIP  = [];
   app.condensatePipeWIP = [];
   app.powerOutlet    = prev.powerOutlet    ?? null;
+  app.outletHeight   = prev.outletHeight   ?? 0;
   app.condensateDrain  = prev.condensateDrain ?? null;
   app.powerPipe      = prev.powerPipe      ?? [];
   app.condensatePipe = prev.condensatePipe ?? [];
@@ -2010,6 +2017,7 @@ function clearAll() {
   app.pipes         = [[]];
   app.pipeWIP           = [];
   app.powerOutlet       = null;
+  app.outletHeight      = 0;
   app.condensateDrain   = null;
   app.powerPipe         = [];
   app.condensatePipe    = [];
@@ -2146,6 +2154,19 @@ function updateHeightUI() {
     render();
   });
   container.appendChild(labelOut);
+
+  const labelPres = document.createElement('label');
+  labelPres.className = 'height-item';
+  const presVal = app.outletHeight || 0;
+  labelPres.htmlFor = 'height-outlet';
+  labelPres.innerHTML = `PRESA: <input id="height-outlet" type="number" min="0" max="10" step="0.1" value="${presVal}"> m`;
+  const presInput = labelPres.querySelector('input');
+  presInput.addEventListener('change', () => {
+    app.outletHeight = parseFloat(presInput.value) || 0;
+    updateResults();
+    render();
+  });
+  container.appendChild(labelPres);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2216,7 +2237,50 @@ function calculatePowerCondensaResults() {
     const crossings = countUniqueCrossings(pipe, walls);
     return { meters, crossings };
   };
-  return { power: calc(app.powerPipe), condensa: calc(app.condensatePipe) };
+
+  const powerResult = calc(app.powerPipe);
+  if (powerResult) {
+    const conn = detectPowerPipeConnection();
+    const outletH = app.outletHeight || 0;
+    let heightDiff = 0;
+    if (conn) {
+      if (conn.type === 'outdoor') {
+        heightDiff = Math.abs(outletH - (app.outdoorHeight || 0));
+      } else if (conn.type === 'indoor') {
+        const iH = (app.indoorHeights && app.indoorHeights[conn.index] != null)
+          ? app.indoorHeights[conn.index] : 0;
+        heightDiff = Math.abs(outletH - iH);
+      }
+    }
+    powerResult.heightDiff = heightDiff;
+    powerResult.totalMeters = powerResult.meters + heightDiff;
+  }
+
+  return { power: powerResult, condensa: calc(app.condensatePipe) };
+}
+
+/**
+ * Detect whether the power pipe's endpoints are close to an AC unit.
+ * Returns { type: 'outdoor' } if near the outdoor unit,
+ *         { type: 'indoor', index: i } if near indoor unit i,
+ *         null if no recognized connection.
+ */
+function detectPowerPipeConnection() {
+  const pipe = app.powerPipe.length >= 2 ? app.powerPipe : app.powerPipeWIP;
+  if (pipe.length < 2) return null;
+  // Use a generous radius so snapped pipe endpoints reliably hit nearby units
+  const CONNECT_R = UNIT_W * 2; // 64 px
+  const pts = [pipe[0], pipe[pipe.length - 1]];
+  for (const pt of pts) {
+    if (app.outdoorUnit && dist(pt.x, pt.y, app.outdoorUnit.x, app.outdoorUnit.y) <= CONNECT_R)
+      return { type: 'outdoor' };
+    for (let i = 0; i < app.splitType; i++) {
+      const unit = app.indoorUnits[i];
+      if (unit && dist(pt.x, pt.y, unit.x, unit.y) <= CONNECT_R)
+        return { type: 'indoor', index: i };
+    }
+  }
+  return null;
 }
 
 // ════════════════════════════════════════════════════════════════
