@@ -145,6 +145,12 @@ const app = {
   // Materials / works checklist
   materials: { staffaUE: false, lavaggioImpianto: false, predisposizione: false },
 
+  // Print notes (not drawn on canvas)
+  indoorNotes: ['', '', ''],  // one note per indoor-unit slot (indices 0-2)
+  outdoorNote: '',             // note for outdoor unit
+  holesNote:   '',             // note shown next to total holes count
+  generalNote: '',             // long general note at page bottom
+
   // Undo history  (array of JSON snapshots)
   history: [],
 };
@@ -332,6 +338,10 @@ function loadTemplate(name) {
   app.condensatePipeWIP = [];
   app.splitType         = 1;
   app.activePipeIdx     = 0;
+  app.indoorNotes       = ['', '', ''];
+  app.outdoorNote       = '';
+  app.holesNote         = '';
+  app.generalNote       = '';
 
   render();
   updateResults();
@@ -2403,6 +2413,10 @@ function saveHistory() {
     condensateDrain: app.condensateDrain,
     powerPipe:      app.powerPipe,
     condensatePipe: app.condensatePipe,
+    indoorNotes:    app.indoorNotes,
+    outdoorNote:    app.outdoorNote,
+    holesNote:      app.holesNote,
+    generalNote:    app.generalNote,
   });
   app.history.push(snapshot);
   if (app.history.length > 40) app.history.shift();
@@ -2436,6 +2450,10 @@ function undo() {
       if (el) el.checked = app.materials[key] || false;
     });
   }
+  app.indoorNotes = prev.indoorNotes ?? ['', '', ''];
+  app.outdoorNote = prev.outdoorNote ?? '';
+  app.holesNote   = prev.holesNote   ?? '';
+  app.generalNote = prev.generalNote ?? '';
   syncCompletePipeBtn();
   updateSplitUI();
   updateHeightUI();
@@ -2493,6 +2511,10 @@ function clearAll() {
     const el = document.getElementById('mat-' + key);
     if (el) el.checked = false;
   });
+  app.indoorNotes = ['', '', ''];
+  app.outdoorNote = '';
+  app.holesNote   = '';
+  app.generalNote = '';
   syncCompletePipeBtn();
   updateSplitUI();
   updateHeightUI();
@@ -2509,9 +2531,10 @@ function setSplitType(n) {
   saveHistory();
   app.splitType = n;
   // Ensure arrays have enough slots
-  while (app.pipes.length < n)        app.pipes.push([]);
-  while (app.indoorUnits.length < n)  app.indoorUnits.push(null);
+  while (app.pipes.length < n)         app.pipes.push([]);
+  while (app.indoorUnits.length < n)   app.indoorUnits.push(null);
   while (app.indoorHeights.length < n) app.indoorHeights.push(0);
+  while (app.indoorNotes.length < n)   app.indoorNotes.push('');
   // Clamp active index
   if (app.activePipeIdx >= n) app.activePipeIdx = n - 1;
   updateSplitUI();
@@ -2627,11 +2650,68 @@ function updateHeightUI() {
     render();
   });
   container.appendChild(labelPres);
+  updateNotesUI();
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Power & condensate drawing
+//  Print notes UI
 // ════════════════════════════════════════════════════════════════
+function updateNotesUI() {
+  const container = document.getElementById('notes-inputs');
+  if (!container) return;
+  container.innerHTML = '';
+
+  // Per-split indoor notes
+  for (let i = 0; i < app.splitType; i++) {
+    const wrap = document.createElement('label');
+    wrap.className = 'note-item';
+    const val = (app.indoorNotes && app.indoorNotes[i]) || '';
+    const inputId = `note-indoor-${i}`;
+    wrap.htmlFor = inputId;
+    wrap.innerHTML =
+      `<span class="note-lbl">Split INT.${i + 1}:</span>` +
+      `<input id="${inputId}" class="note-input" type="text" maxlength="50" value="${_escHtml(val)}" placeholder="Nota split interno ${i + 1}…">`;
+    const input = wrap.querySelector('input');
+    input.addEventListener('input', () => {
+      if (!app.indoorNotes) app.indoorNotes = [];
+      app.indoorNotes[i] = input.value;
+    });
+    container.appendChild(wrap);
+  }
+
+  // Outdoor unit note
+  const wrapOut = document.createElement('label');
+  wrapOut.className = 'note-item';
+  wrapOut.htmlFor = 'note-outdoor';
+  wrapOut.innerHTML =
+    `<span class="note-lbl">U. Esterna:</span>` +
+    `<input id="note-outdoor" class="note-input" type="text" maxlength="50" value="${_escHtml(app.outdoorNote || '')}" placeholder="Nota unità esterna…">`;
+  const outInput = wrapOut.querySelector('input');
+  outInput.addEventListener('input', () => { app.outdoorNote = outInput.value; });
+  container.appendChild(wrapOut);
+
+  // Holes note
+  const wrapHoles = document.createElement('label');
+  wrapHoles.className = 'note-item';
+  wrapHoles.htmlFor = 'note-holes';
+  wrapHoles.innerHTML =
+    `<span class="note-lbl">Fori totali:</span>` +
+    `<input id="note-holes" class="note-input" type="text" maxlength="50" value="${_escHtml(app.holesNote || '')}" placeholder="Nota fori totali…">`;
+  const holesInput = wrapHoles.querySelector('input');
+  holesInput.addEventListener('input', () => { app.holesNote = holesInput.value; });
+  container.appendChild(wrapHoles);
+
+  // General note (textarea)
+  const wrapGen = document.createElement('label');
+  wrapGen.className = 'note-item';
+  wrapGen.htmlFor = 'note-general';
+  wrapGen.innerHTML =
+    `<span class="note-lbl">Note generali:</span>` +
+    `<textarea id="note-general" class="note-textarea" maxlength="500" rows="3" placeholder="Note da aggiungere in fondo alla stampa…">${_escHtml(app.generalNote || '')}</textarea>`;
+  const genTextarea = wrapGen.querySelector('textarea');
+  genTextarea.addEventListener('input', () => { app.generalNote = genTextarea.value; });
+  container.appendChild(wrapGen);
+}
 function drawSpecialUnits() {
   const ctx = app.ctx;
   const hw = UNIT_W / 2, hh = UNIT_H / 2;
@@ -2930,22 +3010,27 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
   const hasAnyTrace = results.some(r => r !== null) || pcResults.power || pcResults.condensa;
   const showDelta   = results.some(r => r && r.heightDiff > 0) ||
                       (pcResults.power && (pcResults.power.heightDiff || 0) > 0);
+  // Show a "Note" column in the trace table only when at least one indoor note is filled
+  const showNoteCol = (app.indoorNotes || []).slice(0, app.splitType).some(n => n && n.trim());
 
   let traceRows = '';
   for (let i = 0; i < app.splitType; i++) {
     const r     = results[i];
     const color = PIPE_COLORS[i];
+    const note  = _escHtml((app.indoorNotes && app.indoorNotes[i]) || '');
     if (r) {
       traceRows += `<tr>
         <td style="color:${color};font-weight:700">T${i + 1}</td>
         <td>${r.meters.toFixed(1)} m</td>
         ${showDelta ? `<td>${r.heightDiff > 0 ? r.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
         <td>${r.crossings}</td>
+        ${showNoteCol ? `<td class="note-cell">${note}</td>` : ''}
       </tr>`;
     } else {
       traceRows += `<tr>
         <td style="color:${color};font-weight:700">T${i + 1}</td>
         <td colspan="${showDelta ? 3 : 2}" style="color:#aaa">—</td>
+        ${showNoteCol ? `<td class="note-cell">${note}</td>` : ''}
       </tr>`;
     }
   }
@@ -2956,6 +3041,7 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
       <td>${(pm.totalMeters != null ? pm.totalMeters : pm.meters).toFixed(1)} m</td>
       ${showDelta ? `<td>${(pm.heightDiff || 0) > 0 ? pm.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
       <td>${pm.crossings}</td>
+      ${showNoteCol ? '<td></td>' : ''}
     </tr>`;
   }
   if (pcResults.condensa) {
@@ -2965,6 +3051,7 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
       <td>${cm.meters.toFixed(1)} m</td>
       ${showDelta ? '<td>—</td>' : ''}
       <td>${cm.crossings}</td>
+      ${showNoteCol ? '<td></td>' : ''}
     </tr>`;
   }
 
@@ -2976,6 +3063,7 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
         <th>Lunghezza tracciato</th>
         ${showDelta ? '<th>Δh altezze</th>' : ''}
         <th>Fori parete</th>
+        ${showNoteCol ? '<th>Note</th>' : ''}
       </tr></thead>
       <tbody>${traceRows}</tbody>
     </table>` : '';
@@ -2984,8 +3072,15 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
   const drillingPts  = collectDrillingPoints(true);  // only main refrigerant holes for total count
   const totalHoles   = drillingPts.length;
   const complexity   = complexityLabel(totalHoles);
+  const holesNote    = (app.holesNote && app.holesNote.trim())
+    ? ` <span class="inline-note">— ${_escHtml(app.holesNote)}</span>` : '';
   const holesHTML    = totalHoles > 0
-    ? `<p class="info-row">🔩 <strong>Fori totali nelle pareti: ${totalHoles}</strong> — ${complexity.text}</p>`
+    ? `<p class="info-row">🔩 <strong>Fori totali nelle pareti: ${totalHoles}</strong> — ${complexity.text}${holesNote}</p>`
+    : '';
+
+  // ── Outdoor unit note ──────────────────────────────────────────
+  const outdoorNoteHTML = (app.outdoorNote && app.outdoorNote.trim())
+    ? `<p class="info-row">🌡 <strong>Nota u. esterna:</strong> <span class="inline-note">${_escHtml(app.outdoorNote)}</span></p>`
     : '';
 
   // ── Materials / works ──────────────────────────────────────────
@@ -3000,6 +3095,13 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
     <ul class="mat-list">
       ${checkedMats.map(k => `<li>${MAT_LABELS[k]}</li>`).join('')}
     </ul>` : '';
+
+  // ── General note ───────────────────────────────────────────────
+  const generalNoteHTML = (app.generalNote && app.generalNote.trim())
+    ? `<div class="general-note-wrap">
+        <h2 class="sec-title">📝 Note</h2>
+        <p class="general-note">${_escHtml(app.generalNote).replace(/\n/g, '<br>')}</p>
+      </div>` : '';
 
   // ── Floor plan image ───────────────────────────────────────────
   const imgHTML = dataURL
@@ -3047,8 +3149,13 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
     th { background: #1565C0; color: #fff; padding: 5px 8px; text-align: left; }
     td { border: 1px solid #dadce0; padding: 4px 8px; }
     tr:nth-child(even) td { background: #f8f9fa; }
+    .note-cell { font-style: italic; color: #5f6368; }
     .info-row  { margin: 6px 0; font-size: 10.5pt; }
+    .inline-note { font-style: italic; color: #5f6368; }
     .mat-list  { padding-left: 18px; font-size: 10pt; line-height: 1.9; }
+    /* General note */
+    .general-note-wrap { margin-top: 10px; }
+    .general-note { font-size: 10.5pt; line-height: 1.6; white-space: pre-wrap; }
     /* Footer */
     .print-footer {
       margin-top: 14px; text-align: center;
@@ -3074,7 +3181,9 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
   <div class="summary">
     ${traceTableHTML}
     ${holesHTML}
+    ${outdoorNoteHTML}
     ${materialsHTML}
+    ${generalNoteHTML}
   </div>
 
   <div class="print-footer">
@@ -3154,6 +3263,10 @@ function _projectSnapshot() {
     powerPipe:       app.powerPipe,
     condensatePipe:  app.condensatePipe,
     metersPerCell:   app.metersPerCell,
+    indoorNotes:     app.indoorNotes,
+    outdoorNote:     app.outdoorNote,
+    holesNote:       app.holesNote,
+    generalNote:     app.generalNote,
   });
 }
 
@@ -3163,7 +3276,9 @@ function saveProject() {
   const projectName = name.trim() || 'Progetto senza nome';
 
   const project = {
-    id:      Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    id:      (typeof crypto !== 'undefined' && crypto.randomUUID)
+               ? crypto.randomUUID()
+               : Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
     name:    projectName,
     savedAt: Date.now(),
     state:   _projectSnapshot(),
@@ -3204,6 +3319,10 @@ function loadProject(id) {
     app.powerPipe        = s.powerPipe        ?? [];
     app.condensatePipe   = s.condensatePipe   ?? [];
     app.metersPerCell    = s.metersPerCell     ?? 0.5;
+    app.indoorNotes      = s.indoorNotes      ?? ['', '', ''];
+    app.outdoorNote      = s.outdoorNote      ?? '';
+    app.holesNote        = s.holesNote        ?? '';
+    app.generalNote      = s.generalNote      ?? '';
     app.pipeWIP          = [];
     app.powerPipeWIP     = [];
     app.condensatePipeWIP = [];
