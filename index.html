@@ -53,6 +53,22 @@
                     title="Clic per aggiungere punti; doppio-clic per completare">
               <span class="ti">〰</span><span class="tl">Traccia</span>
             </button>
+            <button class="tool-btn" data-tool="placeOutlet"
+                    title="Posiziona presa di corrente a parete">
+              <span class="ti">🔌</span><span class="tl">Presa</span>
+            </button>
+            <button class="tool-btn" data-tool="placeDrain"
+                    title="Posiziona scarico condensa a parete">
+              <span class="ti">💧</span><span class="tl">Scarico</span>
+            </button>
+            <button class="tool-btn" data-tool="drawPowerPipe"
+                    title="Disegna traccia corrente elettrica">
+              <span class="ti">⚡</span><span class="tl">T. Corr.</span>
+            </button>
+            <button class="tool-btn" data-tool="drawCondensaPipe"
+                    title="Disegna traccia condensa">
+              <span class="ti">💦</span><span class="tl">T. Cond.</span>
+            </button>
           </div>
         </section>
 
@@ -91,6 +107,13 @@
           </div>
         </section>
 
+        <section class="sb-section" id="heights-section">
+          <h3>Altezze da suolo</h3>
+          <div id="heights-inputs">
+            <!-- populated dynamically -->
+          </div>
+        </section>
+
         <section class="sb-section">
           <div class="action-btns">
             <button id="complete-pipe-btn" class="act-btn primary" disabled>
@@ -115,6 +138,12 @@
         <canvas id="main-canvas"></canvas>
         <div id="canvas-status">
           <span id="mouse-pos">0.0 m, 0.0 m</span>
+          <div class="zoom-controls">
+            <button id="zoom-out-btn" class="zoom-btn" title="Zoom out">−</button>
+            <span id="zoom-level">100%</span>
+            <button id="zoom-in-btn" class="zoom-btn" title="Zoom in">+</button>
+            <button id="zoom-reset-btn" class="zoom-btn" title="Reset zoom (1:1)">⊙ 1:1</button>
+          </div>
           <span id="tool-hint"></span>
         </div>
       </div>
@@ -130,6 +159,21 @@
           <div class="res-row res-total">
             <span class="res-lbl">Complessità:</span>
             <span class="res-val" id="res-complexity">—</span>
+          </div>
+        </section>
+
+        <section class="sb-section">
+          <h3>🔧 Materiali / Lavori</h3>
+          <div id="materials-list">
+            <label class="mat-item">
+              <input type="checkbox" id="mat-staffaUE"> Staffa u.e.
+            </label>
+            <label class="mat-item">
+              <input type="checkbox" id="mat-lavaggioImpianto"> Lavaggio impianto
+            </label>
+            <label class="mat-item">
+              <input type="checkbox" id="mat-predisposizione"> Predisposizione
+            </label>
           </div>
         </section>
 
@@ -159,6 +203,12 @@
             </div>
             <div class="leg-item">
               <span class="leg-sw" style="background:#9C27B0"></span>Traccia 3
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw" style="background:#FF5722;border:1px dashed #BF360C"></span>Traccia corrente
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw" style="background:#00BCD4;border:1px dashed #006064"></span>Traccia condensa
             </div>
           </div>
         </section>

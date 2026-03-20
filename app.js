@@ -20,6 +20,14 @@ const PIPE_DARK      = ['#880E4F', '#E65100', '#4A148C'];
 const INDOOR_COLORS  = ['#1976D2', '#F57C00', '#7B1FA2'];
 const INDOOR_DARK    = ['#0D47A1', '#BF360C', '#4A148C'];
 
+const POWER_COLOR    = '#FF5722';
+const POWER_DARK     = '#BF360C';
+const CONDENSA_COLOR = '#00BCD4';
+const CONDENSA_DARK  = '#006064';
+
+// Keys for the materials/works checklist (used in init, undo, clearAll)
+const MATERIALS_KEYS = ['staffaUE', 'lavaggioImpianto', 'predisposizione'];
+
 // ════════════════════════════════════════════════════════════════
 //  Pre-configured templates  (coordinates in grid cells)
 // ════════════════════════════════════════════════════════════════
@@ -85,11 +93,23 @@ const app = {
   indoorUnits: [null], // [{ x, y, angle }, ...]  one per split (up to 3)
   outdoorUnit: null,   // { x, y, angle }
 
+  // Height from ground (metres)
+  indoorHeights: [0],
+  outdoorHeight:  0,
+
   // Completed pipe paths (one array per split)
   pipes:   [[]],   // [[{ x, y }], ...]
 
   // Pipe being drawn (in-progress) – always for the active split
   pipeWIP: [],       // [{ x, y }]
+
+  // Power & condensate lines
+  powerOutlet:       null,
+  condensateDrain:   null,
+  powerPipe:         [],
+  condensatePipe:    [],
+  powerPipeWIP:      [],
+  condensatePipeWIP: [],
 
   // Split / multi-trace state
   splitType:     1,  // 1=single, 2=dual, 3=trial
@@ -107,8 +127,14 @@ const app = {
   // Scale
   metersPerCell: 0.5,
 
-  // Mouse position (raw pixels)
+  // Mouse position (world coordinates)
   mouse: { x: 0, y: 0 },
+
+  // Zoom / pan
+  zoom: 1, panX: 0, panY: 0, _panStart: null, _panStartMouse: null,
+
+  // Materials / works checklist
+  materials: { staffaUE: false, lavaggioImpianto: false, predisposizione: false },
 
   // Undo history  (array of JSON snapshots)
   history: [],
@@ -130,6 +156,8 @@ function init() {
   app.canvas.addEventListener('mouseup',     onMouseUp);
   app.canvas.addEventListener('dblclick',    onDblClick);
   app.canvas.addEventListener('contextmenu', e => e.preventDefault());
+  app.canvas.addEventListener('wheel', onWheel, { passive: false });
+  app.canvas.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
 
   document.addEventListener('keydown', onKeyDown);
 
@@ -170,6 +198,25 @@ function init() {
   loadTemplate('bilocale');
   updateSplitUI();
   updateHint();
+
+  // Zoom controls
+  document.getElementById('zoom-reset-btn').addEventListener('click', () => {
+    app.zoom = 1; app.panX = 0; app.panY = 0; render();
+  });
+  document.getElementById('zoom-in-btn').addEventListener('click', () => {
+    app.zoom = Math.min(8, app.zoom * 1.15); render();
+  });
+  document.getElementById('zoom-out-btn').addEventListener('click', () => {
+    app.zoom = Math.max(0.15, app.zoom / 1.15); render();
+  });
+
+  // Materials checkboxes
+  MATERIALS_KEYS.forEach(key => {
+    const el = document.getElementById('mat-' + key);
+    if (el) el.addEventListener('change', e => { app.materials[key] = e.target.checked; });
+  });
+
+  updateHeightUI();
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -186,6 +233,13 @@ function resizeCanvas() {
 //  Coordinate helpers
 // ════════════════════════════════════════════════════════════════
 function getPos(e) {
+  const r = app.canvas.getBoundingClientRect();
+  const rawX = e.clientX - r.left;
+  const rawY = e.clientY - r.top;
+  return { x: (rawX - app.panX) / app.zoom, y: (rawY - app.panY) / app.zoom };
+}
+
+function getRawPos(e) {
   const r = app.canvas.getBoundingClientRect();
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
@@ -225,14 +279,23 @@ function loadTemplate(name) {
   app.manualWalls  = [];
   app.indoorUnits  = [null];
   app.outdoorUnit  = null;
-  app.pipes        = [[]];
-  app.pipeWIP      = [];
-  app.splitType    = 1;
-  app.activePipeIdx = 0;
+  app.indoorHeights = [0];
+  app.outdoorHeight = 0;
+  app.pipes             = [[]];
+  app.pipeWIP           = [];
+  app.powerOutlet       = null;
+  app.condensateDrain   = null;
+  app.powerPipe         = [];
+  app.condensatePipe    = [];
+  app.powerPipeWIP      = [];
+  app.condensatePipeWIP = [];
+  app.splitType         = 1;
+  app.activePipeIdx     = 0;
 
   render();
   updateResults();
   updateSplitUI();
+  updateHeightUI();
   setStatus(`Template "${tpl.name}" caricato. Posiziona split interno (❄) e unità esterna (🌡).`);
 }
 
@@ -405,7 +468,7 @@ function snapPipeToWall(rawPt) {
 // ════════════════════════════════════════════════════════════════
 //  Calculations
 // ════════════════════════════════════════════════════════════════
-/** Returns an array of {meters, crossings} for each active split (null if no pipe). */
+/** Returns an array of {meters, totalMeters, heightDiff, crossings} for each active split (null if no pipe). */
 function calculateResults() {
   const results = [];
   const walls = allWalls();
@@ -430,7 +493,13 @@ function calculateResults() {
           crossings++;
       }
     }
-    results.push({ meters, crossings });
+
+    const iH = (app.indoorHeights && app.indoorHeights[i]) ? app.indoorHeights[i] : 0;
+    const oH = app.outdoorHeight || 0;
+    const heightDiff = Math.abs(iH - oH);
+    const totalMeters = meters + heightDiff;
+
+    results.push({ meters, totalMeters, heightDiff, crossings });
   }
   return results;
 }
@@ -459,15 +528,38 @@ function updateResults() {
     if (r) {
       hasAny = true;
       totalCrossings += r.crossings;
+      let val = r.totalMeters.toFixed(1) + ' m';
+      if (r.heightDiff > 0) val += ` (Δh ${r.heightDiff.toFixed(1)} m)`;
+      val += ` | ${r.crossings} par.`;
       row.innerHTML =
         `<span class="res-lbl" style="color:${color};font-weight:700">T${i+1}:</span>` +
-        `<span class="res-val">${r.meters.toFixed(1)} m &nbsp;|&nbsp; ${r.crossings} par.</span>`;
+        `<span class="res-val">${val}</span>`;
     } else {
       row.innerHTML =
         `<span class="res-lbl" style="color:${color};font-weight:700">T${i+1}:</span>` +
         `<span class="res-val" style="color:#aaa">—</span>`;
     }
     container.appendChild(row);
+  }
+
+  const pcResults = calculatePowerCondensaResults();
+  if (pcResults.power) {
+    const row = document.createElement('div');
+    row.className = 'res-row';
+    row.innerHTML = `<span class="res-lbl" style="color:${POWER_COLOR};font-weight:700">⚡ Corr.:</span>` +
+      `<span class="res-val">${pcResults.power.meters.toFixed(1)} m | ${pcResults.power.crossings} par.</span>`;
+    container.appendChild(row);
+    hasAny = true;
+    totalCrossings += pcResults.power.crossings;
+  }
+  if (pcResults.condensa) {
+    const row = document.createElement('div');
+    row.className = 'res-row';
+    row.innerHTML = `<span class="res-lbl" style="color:${CONDENSA_COLOR};font-weight:700">💧 Cond.:</span>` +
+      `<span class="res-val">${pcResults.condensa.meters.toFixed(1)} m | ${pcResults.condensa.crossings} par.</span>`;
+    container.appendChild(row);
+    hasAny = true;
+    totalCrossings += pcResults.condensa.crossings;
   }
 
   const complexityEl = document.getElementById('res-complexity');
@@ -488,31 +580,52 @@ function render() {
   const { ctx, canvas } = app;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  ctx.save();
+  ctx.translate(app.panX, app.panY);
+  ctx.scale(app.zoom, app.zoom);
+
   drawGrid();
   drawRooms();
   drawRoomWallLabels();
   drawManualWalls();
   drawPipe();
+  drawPowerCondensaPipes();
   drawAcUnits();
+  drawSpecialUnits();
   drawInProgress();
   drawRoomResizeHandles();
+
+  ctx.restore();
+
   updateMousePos();
+  const zoomEl = document.getElementById('zoom-level');
+  if (zoomEl) zoomEl.textContent = Math.round(app.zoom * 100) + '%';
 }
 
 /* ── Grid ── */
 function drawGrid() {
   const { ctx, canvas } = app;
-  ctx.fillStyle = '#fafafa';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const x0 = -app.panX / app.zoom;
+  const y0 = -app.panY / app.zoom;
+  const x1 = (canvas.width  - app.panX) / app.zoom;
+  const y1 = (canvas.height - app.panY) / app.zoom;
 
-  ctx.lineWidth = 0.5;
-  for (let x = 0; x <= canvas.width; x += GRID) {
-    ctx.strokeStyle = x % (GRID * 5) === 0 ? '#d0d0d0' : '#ebebeb';
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+  ctx.fillStyle = '#fafafa';
+  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+
+  ctx.lineWidth = 0.5 / app.zoom;
+  const gx0 = Math.floor(x0 / GRID) * GRID;
+  const gy0 = Math.floor(y0 / GRID) * GRID;
+
+  for (let x = gx0; x <= x1 + GRID; x += GRID) {
+    const idx = Math.round(x / GRID);
+    ctx.strokeStyle = idx % 5 === 0 ? '#d0d0d0' : '#ebebeb';
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
   }
-  for (let y = 0; y <= canvas.height; y += GRID) {
-    ctx.strokeStyle = y % (GRID * 5) === 0 ? '#d0d0d0' : '#ebebeb';
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+  for (let y = gy0; y <= y1 + GRID; y += GRID) {
+    const idx = Math.round(y / GRID);
+    ctx.strokeStyle = idx % 5 === 0 ? '#d0d0d0' : '#ebebeb';
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
   }
 }
 
@@ -600,6 +713,14 @@ function drawAcUnits() {
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(`❄ INT.${i + 1}`, 0, 0);
+    const h = app.indoorHeights ? (app.indoorHeights[i] || 0) : 0;
+    if (h > 0) {
+      ctx.fillStyle    = INDOOR_COLORS[i];
+      ctx.font         = '6px Segoe UI, sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(h.toFixed(1) + 'm↑', 0, UNIT_H / 2 + 2);
+    }
     ctx.restore();
   }
 
@@ -614,6 +735,14 @@ function drawAcUnits() {
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('🌡 U.EST.', 0, 0);
+    const oh = app.outdoorHeight || 0;
+    if (oh > 0) {
+      ctx.fillStyle    = '#388E3C';
+      ctx.font         = '6px Segoe UI, sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(oh.toFixed(1) + 'm↑', 0, UNIT_H / 2 + 2);
+    }
     ctx.restore();
   }
 }
@@ -832,16 +961,50 @@ function drawInProgress() {
     ctx.globalAlpha = 1;
   }
 
+  // Power pipe WIP
+  if (app.powerPipeWIP.length > 0) {
+    const pts = app.powerPipeWIP;
+    ctx.strokeStyle = POWER_COLOR; ctx.lineWidth = PIPE_T; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke(); ctx.setLineDash([]);
+    for (const pt of pts) pipeDot(ctx, pt.x, pt.y, POWER_COLOR);
+    const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(snap(app.mouse.x, app.mouse.y)) || snap(app.mouse.x, app.mouse.y);
+    ctx.globalAlpha = 0.4; ctx.strokeStyle = POWER_COLOR; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
+    ctx.beginPath(); ctx.moveTo(pts[pts.length-1].x, pts[pts.length-1].y); ctx.lineTo(pipeCursor.x, pipeCursor.y);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  // Condensate pipe WIP
+  if (app.condensatePipeWIP.length > 0) {
+    const pts = app.condensatePipeWIP;
+    ctx.strokeStyle = CONDENSA_COLOR; ctx.lineWidth = PIPE_T; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke(); ctx.setLineDash([]);
+    for (const pt of pts) pipeDot(ctx, pt.x, pt.y, CONDENSA_COLOR);
+    const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(snap(app.mouse.x, app.mouse.y)) || snap(app.mouse.x, app.mouse.y);
+    ctx.globalAlpha = 0.4; ctx.strokeStyle = CONDENSA_COLOR; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
+    ctx.beginPath(); ctx.moveTo(pts[pts.length-1].x, pts[pts.length-1].y); ctx.lineTo(pipeCursor.x, pipeCursor.y);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
   // Snap cursor dot for drawing tools
   if (app.tool === 'drawRoom' || app.tool === 'drawWall') {
     snapDot(ctx, m.x, m.y);
   } else if (app.tool === 'drawPipe') {
     const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(m) || m;
     snapDot(ctx, pipeCursor.x, pipeCursor.y);
+  } else if (app.tool === 'drawPowerPipe' || app.tool === 'drawCondensaPipe') {
+    const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(snap(app.mouse.x, app.mouse.y)) || snap(app.mouse.x, app.mouse.y);
+    snapDot(ctx, pipeCursor.x, pipeCursor.y);
   }
 
   // Ghost unit preview while hovering with placement tools
-  if (app.tool === 'placeIndoor' || app.tool === 'placeOutdoor') {
+  if (app.tool === 'placeIndoor' || app.tool === 'placeOutdoor' ||
+      app.tool === 'placeOutlet' || app.tool === 'placeDrain') {
     const ghost = snapUnitToWall(app.mouse);
     if (ghost) {
       ctx.save();
@@ -852,9 +1015,15 @@ function drawInProgress() {
       if (app.tool === 'placeIndoor') {
         fill   = INDOOR_COLORS[app.activePipeIdx];
         stroke = INDOOR_DARK[app.activePipeIdx];
-      } else {
+      } else if (app.tool === 'placeOutdoor') {
         fill   = '#388E3C';
         stroke = '#1B5E20';
+      } else if (app.tool === 'placeOutlet') {
+        fill   = POWER_COLOR;
+        stroke = POWER_DARK;
+      } else {
+        fill   = CONDENSA_COLOR;
+        stroke = CONDENSA_DARK;
       }
       drawUnitBox(ctx, -UNIT_W / 2, -UNIT_H / 2, UNIT_W, UNIT_H, fill, stroke);
       ctx.restore();
@@ -911,6 +1080,12 @@ function drawRoomResizeHandles() {
 //  Mouse events
 // ════════════════════════════════════════════════════════════════
 function onMouseDown(e) {
+  if (e.button === 1) {
+    e.preventDefault();
+    app._panStart      = { panX: app.panX, panY: app.panY };
+    app._panStartMouse = getRawPos(e);
+    return;
+  }
   if (e.button !== 0) return;
   const raw = getPos(e);
   const s   = snap(raw.x, raw.y);
@@ -967,6 +1142,26 @@ function onMouseDown(e) {
       break;
     }
 
+    case 'placeOutlet': {
+      const wallSnap = snapUnitToWall(raw);
+      if (!wallSnap) { setStatus('⚠ Avvicinati a una parete per posizionare la presa di corrente.'); break; }
+      saveHistory();
+      app.powerOutlet = wallSnap;
+      setStatus('🔌 Presa di corrente posizionata.');
+      render();
+      break;
+    }
+
+    case 'placeDrain': {
+      const wallSnap = snapUnitToWall(raw);
+      if (!wallSnap) { setStatus('⚠ Avvicinati a una parete per posizionare lo scarico condensa.'); break; }
+      saveHistory();
+      app.condensateDrain = wallSnap;
+      setStatus('💧 Scarico condensa posizionato.');
+      render();
+      break;
+    }
+
     case 'drawPipe': {
       // Snap priority: wall face > AC unit > grid
       const wallSnap  = snapPipeToWall(raw);
@@ -988,11 +1183,51 @@ function onMouseDown(e) {
       }
       break;
     }
+
+    case 'drawPowerPipe': {
+      const wallSnap  = snapPipeToWall(raw);
+      const snappedPt = wallSnap || snapToUnit(s) || s;
+      const now = Date.now(); const last = app._lastPipeClick;
+      if (app.powerPipeWIP.length >= 1 && last && last.x === snappedPt.x && last.y === snappedPt.y && now - last.time < 400) {
+        app._lastPipeClick = null;
+        if (app.powerPipeWIP.length >= 2) completePipe();
+      } else {
+        app._lastPipeClick = { time: now, x: snappedPt.x, y: snappedPt.y };
+        app.powerPipeWIP.push({ ...snappedPt });
+        syncCompletePipeBtn();
+        render();
+      }
+      break;
+    }
+
+    case 'drawCondensaPipe': {
+      const wallSnap  = snapPipeToWall(raw);
+      const snappedPt = wallSnap || snapToUnit(s) || s;
+      const now = Date.now(); const last = app._lastPipeClick;
+      if (app.condensatePipeWIP.length >= 1 && last && last.x === snappedPt.x && last.y === snappedPt.y && now - last.time < 400) {
+        app._lastPipeClick = null;
+        if (app.condensatePipeWIP.length >= 2) completePipe();
+      } else {
+        app._lastPipeClick = { time: now, x: snappedPt.x, y: snappedPt.y };
+        app.condensatePipeWIP.push({ ...snappedPt });
+        syncCompletePipeBtn();
+        render();
+      }
+      break;
+    }
   }
 }
 
 function onMouseMove(e) {
+  const rawPos  = getRawPos(e);
   app.mouse = getPos(e);
+
+  if (app._panStart) {
+    app.panX = app._panStart.panX + (rawPos.x - app._panStartMouse.x);
+    app.panY = app._panStart.panY + (rawPos.y - app._panStartMouse.y);
+    render();
+    return;
+  }
 
   if (app.dragTarget) moveDrag(app.mouse);
 
@@ -1028,6 +1263,10 @@ function updateSelectCursor(pos) {
 }
 
 function onMouseUp(e) {
+  if (e.button === 1) {
+    app._panStart = null;
+    return;
+  }
   if (e.button !== 0) return;
 
   // Finish room draw on mouse-up
@@ -1063,6 +1302,16 @@ function onDblClick(e) {
   if (app.tool === 'drawPipe' && app.pipeWIP.length >= 2) {
     app.pipeWIP.pop(); // remove duplicate added by second mousedown
     if (app.pipeWIP.length >= 2) completePipe();
+    return;
+  }
+  if (app.tool === 'drawPowerPipe' && app.powerPipeWIP.length >= 2) {
+    app.powerPipeWIP.pop();
+    if (app.powerPipeWIP.length >= 2) completePipe();
+    return;
+  }
+  if (app.tool === 'drawCondensaPipe' && app.condensatePipeWIP.length >= 2) {
+    app.condensatePipeWIP.pop();
+    if (app.condensatePipeWIP.length >= 2) completePipe();
     return;
   }
 
@@ -1251,6 +1500,8 @@ function onKeyDown(e) {
     app.drawStart = null;
     app.wallStart = null;
     app.pipeWIP   = [];
+    app.powerPipeWIP = [];
+    app.condensatePipeWIP = [];
     syncCompletePipeBtn();
     render();
     setStatus('Operazione annullata.');
@@ -1433,6 +1684,30 @@ function snapToUnit(pt) {
 //  Pipe completion
 // ════════════════════════════════════════════════════════════════
 function completePipe() {
+  const tool = app.tool;
+  if (tool === 'drawPowerPipe') {
+    if (app.powerPipeWIP.length < 2) return;
+    saveHistory();
+    app.powerPipe = [...app.powerPipeWIP];
+    app.powerPipeWIP = [];
+    syncCompletePipeBtn(); render(); updateResults();
+    selectTool('select');
+    const r = calculatePowerCondensaResults();
+    setStatus(`✅ Traccia corrente completata: ${r.power ? r.power.meters.toFixed(1) + ' m — ' + r.power.crossings + ' pareti' : '—'}`);
+    return;
+  }
+  if (tool === 'drawCondensaPipe') {
+    if (app.condensatePipeWIP.length < 2) return;
+    saveHistory();
+    app.condensatePipe = [...app.condensatePipeWIP];
+    app.condensatePipeWIP = [];
+    syncCompletePipeBtn(); render(); updateResults();
+    selectTool('select');
+    const r = calculatePowerCondensaResults();
+    setStatus(`✅ Traccia condensa completata: ${r.condensa ? r.condensa.meters.toFixed(1) + ' m — ' + r.condensa.crossings + ' pareti' : '—'}`);
+    return;
+  }
+  // Original refrigerant pipe logic
   if (app.pipeWIP.length < 2) return;
   saveHistory();
   app.pipes[app.activePipeIdx] = [...app.pipeWIP];
@@ -1444,12 +1719,17 @@ function completePipe() {
   const results = calculateResults();
   const r = results[app.activePipeIdx];
   if (r) {
-    setStatus(`✅ Traccia ${app.activePipeIdx + 1} completata: ${r.meters.toFixed(1)} m — ${r.crossings} pareti attraversate.`);
+    setStatus(`✅ Traccia ${app.activePipeIdx + 1} completata: ${r.totalMeters.toFixed(1)} m — ${r.crossings} pareti attraversate.`);
   }
 }
 
 function syncCompletePipeBtn() {
-  document.getElementById('complete-pipe-btn').disabled = app.pipeWIP.length < 2;
+  const tool = app.tool;
+  let hasWIP = false;
+  if (tool === 'drawPipe')             hasWIP = app.pipeWIP.length >= 2;
+  else if (tool === 'drawPowerPipe')   hasWIP = app.powerPipeWIP.length >= 2;
+  else if (tool === 'drawCondensaPipe') hasWIP = app.condensatePipeWIP.length >= 2;
+  document.getElementById('complete-pipe-btn').disabled = !hasWIP;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1475,12 +1755,16 @@ function selectTool(tool) {
 function updateHint() {
   const t = app.activePipeIdx + 1;
   const hints = {
-    select:      'Clicca e trascina per spostare; doppio-clic su parete/lato stanza per modificare lunghezza',
-    drawRoom:    'Trascina per disegnare una stanza',
-    drawWall:    'Clic punto iniziale, poi clic punto finale (solo ortogonale)',
-    placeIndoor: `Clic vicino a una parete per posizionare Split Int. ${t} (❄)`,
-    placeOutdoor:'Clic vicino a una parete per posizionare l\'unità esterna (🌡)',
-    drawPipe:    `Traccia ${t}: clicca i punti del percorso — doppio-clic per completare`,
+    select:          'Clicca e trascina per spostare; doppio-clic su parete/lato stanza per modificare lunghezza',
+    drawRoom:        'Trascina per disegnare una stanza',
+    drawWall:        'Clic punto iniziale, poi clic punto finale (solo ortogonale)',
+    placeIndoor:     `Clic vicino a una parete per posizionare Split Int. ${t} (❄)`,
+    placeOutdoor:    'Clic vicino a una parete per posizionare l\'unità esterna (🌡)',
+    drawPipe:        `Traccia ${t}: clicca i punti del percorso — doppio-clic per completare`,
+    placeOutlet:     'Clic vicino a una parete per posizionare la presa di corrente (🔌)',
+    placeDrain:      'Clic vicino a una parete per posizionare lo scarico condensa (💧)',
+    drawPowerPipe:   'Clicca i punti del percorso elettrico — doppio-clic per completare',
+    drawCondensaPipe:'Clicca i punti del percorso condensa — doppio-clic per completare',
   };
   document.getElementById('tool-hint').textContent = hints[app.tool] || '';
 }
@@ -1504,13 +1788,20 @@ function updateMousePos() {
 // ════════════════════════════════════════════════════════════════
 function saveHistory() {
   const snapshot = JSON.stringify({
-    rooms:         app.rooms,
-    manualWalls:   app.manualWalls,
-    indoorUnits:   app.indoorUnits,
-    outdoorUnit:   app.outdoorUnit,
-    pipes:         app.pipes,
-    splitType:     app.splitType,
-    activePipeIdx: app.activePipeIdx,
+    rooms:          app.rooms,
+    manualWalls:    app.manualWalls,
+    indoorUnits:    app.indoorUnits,
+    outdoorUnit:    app.outdoorUnit,
+    indoorHeights:  app.indoorHeights,
+    outdoorHeight:  app.outdoorHeight,
+    pipes:          app.pipes,
+    splitType:      app.splitType,
+    activePipeIdx:  app.activePipeIdx,
+    materials:      app.materials,
+    powerOutlet:    app.powerOutlet,
+    condensateDrain: app.condensateDrain,
+    powerPipe:      app.powerPipe,
+    condensatePipe: app.condensatePipe,
   });
   app.history.push(snapshot);
   if (app.history.length > 40) app.history.shift();
@@ -1523,12 +1814,28 @@ function undo() {
   app.manualWalls   = prev.manualWalls;
   app.indoorUnits   = prev.indoorUnits   ?? [null];
   app.outdoorUnit   = prev.outdoorUnit   ?? null;
+  app.indoorHeights = prev.indoorHeights ?? [0];
+  app.outdoorHeight = prev.outdoorHeight ?? 0;
   app.pipes         = prev.pipes         ?? [[]];
   app.splitType     = prev.splitType     ?? 1;
   app.activePipeIdx = prev.activePipeIdx ?? 0;
   app.pipeWIP       = [];
+  app.powerPipeWIP  = [];
+  app.condensatePipeWIP = [];
+  app.powerOutlet    = prev.powerOutlet    ?? null;
+  app.condensateDrain  = prev.condensateDrain ?? null;
+  app.powerPipe      = prev.powerPipe      ?? [];
+  app.condensatePipe = prev.condensatePipe ?? [];
+  if (prev.materials) {
+    app.materials = prev.materials;
+    MATERIALS_KEYS.forEach(key => {
+      const el = document.getElementById('mat-' + key);
+      if (el) el.checked = app.materials[key] || false;
+    });
+  }
   syncCompletePipeBtn();
   updateSplitUI();
+  updateHeightUI();
   render();
   updateResults();
   setStatus('Azione annullata.');
@@ -1539,12 +1846,20 @@ function undo() {
 // ════════════════════════════════════════════════════════════════
 function clearPipe() {
   saveHistory();
-  app.pipes[app.activePipeIdx] = [];
-  app.pipeWIP = [];
+  if (app.tool === 'drawPowerPipe') {
+    app.powerPipe = []; app.powerPipeWIP = [];
+    setStatus('Traccia corrente cancellata.');
+  } else if (app.tool === 'drawCondensaPipe') {
+    app.condensatePipe = []; app.condensatePipeWIP = [];
+    setStatus('Traccia condensa cancellata.');
+  } else {
+    app.pipes[app.activePipeIdx] = [];
+    app.pipeWIP = [];
+    setStatus(`Traccia ${app.activePipeIdx + 1} cancellata.`);
+  }
   syncCompletePipeBtn();
   render();
   updateResults();
-  setStatus(`Traccia ${app.activePipeIdx + 1} cancellata.`);
 }
 
 function clearAll() {
@@ -1553,15 +1868,29 @@ function clearAll() {
   app.manualWalls   = [];
   app.indoorUnits   = [null];
   app.outdoorUnit   = null;
+  app.indoorHeights = [0];
+  app.outdoorHeight = 0;
   app.pipes         = [[]];
-  app.pipeWIP       = [];
-  app.history       = [];
+  app.pipeWIP           = [];
+  app.powerOutlet       = null;
+  app.condensateDrain   = null;
+  app.powerPipe         = [];
+  app.condensatePipe    = [];
+  app.powerPipeWIP      = [];
+  app.condensatePipeWIP = [];
+  app.history           = [];
   app.drawStart     = null;
   app.wallStart     = null;
   app.splitType     = 1;
   app.activePipeIdx = 0;
+  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+  MATERIALS_KEYS.forEach(key => {
+    const el = document.getElementById('mat-' + key);
+    if (el) el.checked = false;
+  });
   syncCompletePipeBtn();
   updateSplitUI();
+  updateHeightUI();
   render();
   updateResults();
   setStatus('Canvas cancellato.');
@@ -1577,9 +1906,11 @@ function setSplitType(n) {
   // Ensure arrays have enough slots
   while (app.pipes.length < n)        app.pipes.push([]);
   while (app.indoorUnits.length < n)  app.indoorUnits.push(null);
+  while (app.indoorHeights.length < n) app.indoorHeights.push(0);
   // Clamp active index
   if (app.activePipeIdx >= n) app.activePipeIdx = n - 1;
   updateSplitUI();
+  updateHeightUI();
   render();
   updateResults();
   setStatus(`Configurazione: ${n === 1 ? 'Singolo split' : n === 2 ? 'Dual split' : 'Trial split'}.`);
@@ -1618,12 +1949,143 @@ function updateSplitUI() {
     btn.addEventListener('click', () => setActivePipe(i));
     container.appendChild(btn);
   }
+
+  updateHeightUI();
 }
 
 // ════════════════════════════════════════════════════════════════
 //  Shorthand
 // ════════════════════════════════════════════════════════════════
 const id = s => document.getElementById(s);
+
+// ════════════════════════════════════════════════════════════════
+//  Zoom / pan
+// ════════════════════════════════════════════════════════════════
+function onWheel(e) {
+  e.preventDefault();
+  const raw    = getRawPos(e);
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newZoom = Math.max(0.15, Math.min(8, app.zoom * factor));
+  app.panX = raw.x - (raw.x - app.panX) * (newZoom / app.zoom);
+  app.panY = raw.y - (raw.y - app.panY) * (newZoom / app.zoom);
+  app.zoom = newZoom;
+  render();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Height from ground UI
+// ════════════════════════════════════════════════════════════════
+function updateHeightUI() {
+  const container = document.getElementById('heights-inputs');
+  if (!container) return;
+  container.innerHTML = '';
+
+  for (let i = 0; i < app.splitType; i++) {
+    const label = document.createElement('label');
+    label.className = 'height-item';
+    const val = (app.indoorHeights && app.indoorHeights[i] != null) ? app.indoorHeights[i] : 0;
+    const inputId = `height-indoor-${i}`;
+    label.htmlFor = inputId;
+    label.innerHTML = `INT.${i+1}: <input id="${inputId}" type="number" min="0" max="10" step="0.1" value="${val}"> m`;
+    const input = label.querySelector('input');
+    input.addEventListener('change', () => {
+      if (!app.indoorHeights) app.indoorHeights = [];
+      app.indoorHeights[i] = parseFloat(input.value) || 0;
+      updateResults();
+      render();
+    });
+    container.appendChild(label);
+  }
+
+  const labelOut = document.createElement('label');
+  labelOut.className = 'height-item';
+  const outVal = app.outdoorHeight || 0;
+  labelOut.htmlFor = 'height-outdoor';
+  labelOut.innerHTML = `U.EST.: <input id="height-outdoor" type="number" min="0" max="10" step="0.1" value="${outVal}"> m`;
+  const outInput = labelOut.querySelector('input');
+  outInput.addEventListener('change', () => {
+    app.outdoorHeight = parseFloat(outInput.value) || 0;
+    updateResults();
+    render();
+  });
+  container.appendChild(labelOut);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Power & condensate drawing
+// ════════════════════════════════════════════════════════════════
+function drawSpecialUnits() {
+  const ctx = app.ctx;
+  const hw = UNIT_W / 2, hh = UNIT_H / 2;
+
+  if (app.powerOutlet) {
+    const { x, y, angle = 0 } = app.powerOutlet;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, POWER_COLOR, POWER_DARK);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 7px Segoe UI, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('🔌 PRESA', 0, 0);
+    ctx.restore();
+  }
+
+  if (app.condensateDrain) {
+    const { x, y, angle = 0 } = app.condensateDrain;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, CONDENSA_COLOR, CONDENSA_DARK);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 7px Segoe UI, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('💧 SCAR.', 0, 0);
+    ctx.restore();
+  }
+}
+
+function drawPowerCondensaPipes() {
+  const ctx = app.ctx;
+
+  const drawTrace = (pts, wip, color, dark, label) => {
+    const toDraw = pts.length >= 2 ? pts : (wip.length >= 2 ? wip : []);
+    if (toDraw.length < 2) return;
+    ctx.strokeStyle = color; ctx.lineWidth = PIPE_T;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath(); ctx.moveTo(toDraw[0].x, toDraw[0].y);
+    for (let j = 1; j < toDraw.length; j++) ctx.lineTo(toDraw[j].x, toDraw[j].y);
+    ctx.stroke(); ctx.setLineDash([]);
+    for (let j = 1; j < toDraw.length; j++) {
+      const d = dist(toDraw[j-1].x, toDraw[j-1].y, toDraw[j].x, toDraw[j].y);
+      const m = (d / GRID) * app.metersPerCell;
+      if (m >= 0.1) {
+        const mx = (toDraw[j-1].x + toDraw[j].x) / 2;
+        const my = (toDraw[j-1].y + toDraw[j].y) / 2;
+        drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, dark);
+      }
+    }
+    for (const pt of toDraw) pipeDot(ctx, pt.x, pt.y, color);
+    drawTraceLabel(ctx, label, toDraw[0].x, toDraw[0].y, color);
+  };
+
+  drawTrace(app.powerPipe, app.powerPipeWIP, POWER_COLOR, POWER_DARK, '⚡');
+  drawTrace(app.condensatePipe, app.condensatePipeWIP, CONDENSA_COLOR, CONDENSA_DARK, '💧');
+}
+
+function calculatePowerCondensaResults() {
+  const walls = allWalls();
+  const calc = (pipe) => {
+    if (pipe.length < 2) return null;
+    let px = 0;
+    for (let j = 1; j < pipe.length; j++)
+      px += dist(pipe[j-1].x, pipe[j-1].y, pipe[j].x, pipe[j].y);
+    const meters = (px / GRID) * app.metersPerCell;
+    let crossings = 0;
+    for (let j = 1; j < pipe.length; j++) {
+      const { x: ax1, y: ay1 } = pipe[j-1], { x: ax2, y: ay2 } = pipe[j];
+      for (const w of walls)
+        if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2)) crossings++;
+    }
+    return { meters, crossings };
+  };
+  return { power: calc(app.powerPipe), condensa: calc(app.condensatePipe) };
+}
 
 // ════════════════════════════════════════════════════════════════
 //  Boot
