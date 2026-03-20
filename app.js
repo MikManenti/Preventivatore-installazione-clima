@@ -304,9 +304,13 @@ function findNearestWall(pt) {
 
 /**
  * Snap an AC unit position to the nearest wall within WALL_SNAP_R.
- * Returns the snapped {x,y} or null if no wall is close enough.
- * The unit is placed slightly offset perpendicular to the wall so it
- * appears "leaning against" it.
+ * Returns {x, y, angle} or null if no wall is close enough.
+ * - The along-wall coordinate is snapped to the grid for clean placement.
+ * - The perpendicular coordinate is set to exactly UNIT_H/2 + WALL_T + 1 px
+ *   from the wall centre, so the unit never overlaps the wall regardless of
+ *   whether the wall sits on a grid line.
+ * - angle is the wall direction angle; callers should rotate the unit box by
+ *   this angle so its narrow dimension always faces the wall.
  */
 function snapUnitToWall(rawPt) {
   const nearest = findNearestWall(rawPt);
@@ -316,22 +320,31 @@ function snapUnitToWall(rawPt) {
   const dx = wall.x2 - wall.x1, dy = wall.y2 - wall.y1;
   const len = Math.sqrt(dx * dx + dy * dy);
 
-  let offX, offY;
   if (len < 1e-10) {
-    offX = nearest.proj.x;
-    offY = nearest.proj.y;
-  } else {
-    // Perpendicular unit normal to the wall
-    const nx = -dy / len, ny = dx / len;
-    // Determine which side of the wall the cursor is on
-    const side = (rawPt.x - wall.x1) * nx + (rawPt.y - wall.y1) * ny;
-    const sign = side >= 0 ? 1 : -1;
-    const offset = UNIT_H / 2 + 2; // small visual offset so unit "leans" on wall
-    offX = nearest.proj.x + sign * nx * offset;
-    offY = nearest.proj.y + sign * ny * offset;
+    return { ...snap(nearest.proj.x, nearest.proj.y), angle: 0 };
   }
 
-  return snap(offX, offY);
+  // Wall direction angle (for rotating the unit to align with the wall)
+  const angle = Math.atan2(dy, dx);
+
+  // Perpendicular unit normal (90° CCW from wall direction)
+  const nx = -dy / len, ny = dx / len;
+
+  // Which side of the wall is the cursor on?
+  const side = (rawPt.x - wall.x1) * nx + (rawPt.y - wall.y1) * ny;
+  const sign = side >= 0 ? 1 : -1;
+
+  // Snap the projection along the wall to the grid first, then add the exact
+  // perpendicular offset so the unit cannot overlap the wall after rounding.
+  // UNIT_H is the unit's narrow ("depth") dimension when it is rotated to face the wall.
+  const snappedProj = snap(nearest.proj.x, nearest.proj.y);
+  const perpOffset  = UNIT_H / 2 + WALL_T + 1; // safe gap: half-depth + full stroke + 1 px
+
+  return {
+    x: snappedProj.x + sign * nx * perpOffset,
+    y: snappedProj.y + sign * ny * perpOffset,
+    angle,
+  };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -478,23 +491,31 @@ function drawAcUnits() {
   const hw = UNIT_W / 2, hh = UNIT_H / 2;
 
   if (app.indoorUnit) {
-    const { x, y } = app.indoorUnit;
-    drawUnitBox(ctx, x - hw, y - hh, UNIT_W, UNIT_H, '#1976D2', '#0D47A1');
+    const { x, y, angle = 0 } = app.indoorUnit;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, '#1976D2', '#0D47A1');
     ctx.fillStyle    = '#fff';
     ctx.font         = 'bold 8px Segoe UI, sans-serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('❄ SPLIT INT.', x, y);
+    ctx.fillText('❄ SPLIT INT.', 0, 0);
+    ctx.restore();
   }
 
   if (app.outdoorUnit) {
-    const { x, y } = app.outdoorUnit;
-    drawUnitBox(ctx, x - hw, y - hh, UNIT_W, UNIT_H, '#388E3C', '#1B5E20');
+    const { x, y, angle = 0 } = app.outdoorUnit;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, '#388E3C', '#1B5E20');
     ctx.fillStyle    = '#fff';
     ctx.font         = 'bold 8px Segoe UI, sans-serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('🌡 U.EST.', x, y);
+    ctx.fillText('🌡 U.EST.', 0, 0);
+    ctx.restore();
   }
 }
 
@@ -689,6 +710,21 @@ function drawInProgress() {
   if (['drawRoom', 'drawWall', 'drawPipe'].includes(app.tool)) {
     snapDot(ctx, m.x, m.y);
   }
+
+  // Ghost unit preview while hovering with placement tools
+  if (app.tool === 'placeIndoor' || app.tool === 'placeOutdoor') {
+    const ghost = snapUnitToWall(app.mouse);
+    if (ghost) {
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      ctx.translate(ghost.x, ghost.y);
+      ctx.rotate(ghost.angle);
+      const fill   = app.tool === 'placeIndoor' ? '#1976D2' : '#388E3C';
+      const stroke = app.tool === 'placeIndoor' ? '#0D47A1' : '#1B5E20';
+      drawUnitBox(ctx, -UNIT_W / 2, -UNIT_H / 2, UNIT_W, UNIT_H, fill, stroke);
+      ctx.restore();
+    }
+  }
 }
 
 function snapDot(ctx, x, y) {
@@ -842,10 +878,17 @@ function onDblClick(e) {
       return;
     }
 
-    // Check room sides
+    // Check room sides (precise border click → edit one dimension)
     const roomSide = roomSideAt(raw.x, raw.y);
     if (roomSide) {
       editRoomSideLength(roomSide.roomIndex, roomSide.side);
+      return;
+    }
+
+    // Check room interior (click inside room → edit both dimensions)
+    const roomIdx = roomAt(raw.x, raw.y);
+    if (roomIdx >= 0) {
+      editRoomDimensions(roomIdx);
     }
   }
 }
@@ -876,6 +919,15 @@ function roomSideAt(px, py) {
     }
   }
   return null;
+}
+
+/** Returns index of room whose interior contains (px,py), or -1 if none. */
+function roomAt(px, py) {
+  for (let i = app.rooms.length - 1; i >= 0; i--) {
+    const r = app.rooms[i];
+    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return i;
+  }
+  return -1;
 }
 
 /** Prompt user for new length of a manual wall, resize symmetrically around centre. */
@@ -949,6 +1001,51 @@ function editRoomSideLength(roomIdx, side) {
   updateResults();
   render();
   setStatus(`Lato stanza modificato: ${(newPx / GRID * app.metersPerCell).toFixed(2)} m`);
+}
+
+/**
+ * Prompt user for new width and height of a room (centre stays fixed).
+ */
+function editRoomDimensions(roomIdx) {
+  const r = app.rooms[roomIdx];
+  const currentW = (r.w / GRID) * app.metersPerCell;
+  const currentH = (r.h / GRID) * app.metersPerCell;
+
+  const wInput = prompt(
+    `Larghezza stanza "${r.label}" (m):\n(attuale: ${currentW.toFixed(2)} m)`,
+    currentW.toFixed(2)
+  );
+  if (wInput === null) return;
+  const newW = parseFloat(wInput);
+  if (!isFinite(newW) || newW <= 0) {
+    alert('Valore non valido. Inserisci una larghezza positiva in metri.');
+    return;
+  }
+
+  const hInput = prompt(
+    `Profondità stanza "${r.label}" (m):\n(attuale: ${currentH.toFixed(2)} m)`,
+    currentH.toFixed(2)
+  );
+  if (hInput === null) return;
+  const newH = parseFloat(hInput);
+  if (!isFinite(newH) || newH <= 0) {
+    alert('Valore non valido. Inserisci una profondità positiva in metri.');
+    return;
+  }
+
+  const newPxW = Math.max(GRID * 2, Math.round(newW / app.metersPerCell) * GRID);
+  const newPxH = Math.max(GRID * 2, Math.round(newH / app.metersPerCell) * GRID);
+
+  saveHistory();
+  const cx = r.x + r.w / 2;
+  const cy = r.y + r.h / 2;
+  app.rooms[roomIdx].w = newPxW;
+  app.rooms[roomIdx].h = newPxH;
+  app.rooms[roomIdx].x = Math.round((cx - newPxW / 2) / GRID) * GRID;
+  app.rooms[roomIdx].y = Math.round((cy - newPxH / 2) / GRID) * GRID;
+  updateResults();
+  render();
+  setStatus(`Stanza ridimensionata: ${(newPxW / GRID * app.metersPerCell).toFixed(2)} m × ${(newPxH / GRID * app.metersPerCell).toFixed(2)} m`);
 }
 
 function onKeyDown(e) {
