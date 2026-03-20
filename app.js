@@ -677,17 +677,21 @@ function render() {
   ctx.translate(app.panX, app.panY);
   ctx.scale(app.zoom, app.zoom);
 
+  // Layer 3 – background: floor plan, walls, AC units, stairs
   drawGrid();
   drawRooms();
   drawRoomWallLabels();
   drawManualWalls();
-  drawPipe();
-  drawPowerCondensaPipes();
-  drawDrillingPoints();
+  drawStairsLayer();
   drawAcUnits();
   drawSpecialUnits();
-  drawStairsLayer();
+  // Layer 2 – pipes (above floor plan)
+  drawPipe();
+  drawPowerCondensaPipes();
   drawInProgress();
+  // Layer 1 – foreground: drilling points always on top of everything
+  drawDrillingPoints();
+  // UI overlays
   drawRoomResizeHandles();
 
   ctx.restore();
@@ -912,13 +916,13 @@ function drawDrillingPoints() {
   const pts = collectDrillingPoints();
   if (pts.length === 0) return;
 
-  const R      = 8;    // outer circle radius (px)
-  const R_FILL = 6;    // inner fill radius (px)
+  const R      = 5;    // outer circle radius (px) → 10 px diameter
+  const R_FILL = 3.5;  // inner fill radius (px)
 
   pts.forEach((pt, idx) => {
     // Outer white halo (improves visibility on dark walls)
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, R + 2, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, R + 1, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.fill();
 
@@ -932,38 +936,138 @@ function drawDrillingPoints() {
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, R, 0, Math.PI * 2);
     ctx.strokeStyle = '#CC0000';
-    ctx.lineWidth   = 1.8;
+    ctx.lineWidth   = 1.5;
     ctx.stroke();
 
     // Cross-hair lines inside circle
     ctx.strokeStyle = '#CC0000';
-    ctx.lineWidth   = 1.5;
+    ctx.lineWidth   = 1;
     ctx.beginPath();
-    ctx.moveTo(pt.x - R + 3, pt.y);
-    ctx.lineTo(pt.x + R - 3, pt.y);
-    ctx.moveTo(pt.x, pt.y - R + 3);
-    ctx.lineTo(pt.x, pt.y + R - 3);
+    ctx.moveTo(pt.x - (R - 1), pt.y);
+    ctx.lineTo(pt.x + (R - 1), pt.y);
+    ctx.moveTo(pt.x, pt.y - (R - 1));
+    ctx.lineTo(pt.x, pt.y + (R - 1));
     ctx.stroke();
 
     // Hole number badge (1-indexed)
     const label = String(idx + 1);
-    ctx.font         = 'bold 10px Segoe UI, sans-serif';
+    ctx.font         = 'bold 8px Segoe UI, sans-serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     const tw = ctx.measureText(label).width;
     const bx = pt.x + R + 1;
     const by = pt.y - R - 1;
     ctx.fillStyle = '#CC0000';
-    roundRect(ctx, bx - tw / 2 - 2, by - 5, tw + 4, 10, 2);
+    roundRect(ctx, bx - tw / 2 - 2, by - 4, tw + 4, 9, 2);
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.fillText(label, bx, by);
   });
 }
 
+/**
+ * For each segment of each active refrigerant trace, compute a scalar lateral
+ * offset (px) so that geometrically overlapping segments from different traces
+ * are rendered side-by-side rather than directly on top of each other.
+ *
+ * Two segments from different traces are considered "overlapping" when they are:
+ *  - nearly parallel (|sin angle| ≤ ANGLE_TOL)
+ *  - nearly collinear (perpendicular distance ≤ DIST_TOL)
+ *  - overlapping in projection by at least OVERLAP_MIN px
+ *
+ * Overlapping segments are grouped with union-find; within each group they are
+ * spread evenly centred on their original path.
+ *
+ * Returns offsets[traceIdx][segIdx]  (0 when no overlap).
+ */
+function computePipeRenderOffsets() {
+  const ANGLE_TOL  = 0.08;        // |sin angle| threshold (≈ 4.6°)
+  const DIST_TOL   = GRID / 2;    // max perpendicular distance (px)
+  const OVERLAP_MIN = GRID;       // min projection overlap (px)
+  const SIDE_GAP   = PIPE_T + 4; // center-to-center lateral spacing between parallel traces (px)
+                                  // = pipe width (4.5) + 4 px gap between pipe edges
+
+  // ── build flat segment list ───────────────────────────────────────
+  const segs = [];
+  for (let i = 0; i < app.splitType; i++) {
+    const pts = app.pipes[i] || [];
+    for (let j = 1; j < pts.length; j++) {
+      const ax = pts[j-1].x, ay = pts[j-1].y;
+      const bx = pts[j].x,   by = pts[j].y;
+      const ddx = bx - ax,   ddy = by - ay;
+      const len = Math.sqrt(ddx * ddx + ddy * ddy);
+      if (len < 1) continue;
+      segs.push({ ti: i, si: j - 1, ax, ay, bx, by,
+                  ux: ddx / len, uy: ddy / len, len });
+    }
+  }
+
+  // ── union-find helpers ────────────────────────────────────────────
+  const parent = segs.map((_, k) => k);
+  function find(k) {
+    while (parent[k] !== k) { parent[k] = parent[parent[k]]; k = parent[k]; }
+    return k;
+  }
+  function union(a, b) {
+    a = find(a); b = find(b);
+    if (a !== b) parent[b] = a;
+  }
+
+  // ── detect overlapping segment pairs ─────────────────────────────
+  for (let a = 0; a < segs.length; a++) {
+    for (let b = a + 1; b < segs.length; b++) {
+      const sa = segs[a], sb = segs[b];
+      if (sa.ti === sb.ti) continue;           // same trace – skip
+
+      // parallel?
+      const cross = Math.abs(sa.ux * sb.uy - sa.uy * sb.ux);
+      if (cross > ANGLE_TOL) continue;
+
+      // collinear?  perp-distance from sb.start to the line of sa
+      const perpDist = Math.abs((sb.ax - sa.ax) * (-sa.uy) +
+                                (sb.ay - sa.ay) * ( sa.ux));
+      if (perpDist > DIST_TOL) continue;
+
+      // overlapping projection onto sa's direction?
+      const dot = (x, y) => x * sa.ux + y * sa.uy;
+      const pa0 = dot(sa.ax, sa.ay), pa1 = dot(sa.bx, sa.by);
+      const pb0 = dot(sb.ax, sb.ay), pb1 = dot(sb.bx, sb.by);
+      const oStart = Math.max(Math.min(pa0, pa1), Math.min(pb0, pb1));
+      const oEnd   = Math.min(Math.max(pa0, pa1), Math.max(pb0, pb1));
+      if (oEnd - oStart < OVERLAP_MIN) continue;
+
+      union(a, b);
+    }
+  }
+
+  // One entry per segment (segments = points − 1); empty pipes get zero-length arrays.
+  const offsets = [];
+  for (let i = 0; i < app.splitType; i++) {
+    offsets.push(new Array(Math.max(0, (app.pipes[i] || []).length - 1)).fill(0));
+  }
+
+  const groups = new Map();
+  for (let k = 0; k < segs.length; k++) {
+    const r = find(k);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(k);
+  }
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    members.sort((a, b) => segs[a].ti - segs[b].ti); // stable ordering by trace index
+    const n = members.length;
+    members.forEach((k, idx) => {
+      const { ti, si } = segs[k];
+      offsets[ti][si] = (idx - (n - 1) / 2) * SIDE_GAP;
+    });
+  }
+  return offsets;
+}
+
 /* ── Completed pipes (all active splits) ── */
 function drawPipe() {
   const ctx = app.ctx;
+  const segOffsets = computePipeRenderOffsets();
 
   for (let i = 0; i < app.splitType; i++) {
     const pts = app.pipes[i] || [];
@@ -971,6 +1075,7 @@ function drawPipe() {
 
     const color     = PIPE_COLORS[i];
     const darkColor = PIPE_DARK[i];
+    const segsOff   = segOffsets[i] || [];
 
     ctx.strokeStyle = color;
     ctx.lineWidth   = PIPE_T;
@@ -979,12 +1084,28 @@ function drawPipe() {
     ctx.setLineDash([]);
 
     if (pts.length >= 2) {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let j = 1; j < pts.length; j++) ctx.lineTo(pts[j].x, pts[j].y);
-      ctx.stroke();
+      // Draw each segment individually so per-segment lateral offsets can be applied
+      for (let j = 1; j < pts.length; j++) {
+        const lat = segsOff[j - 1] || 0;
+        const ax = pts[j-1].x, ay = pts[j-1].y;
+        const bx = pts[j].x,   by = pts[j].y;
+        let ox = 0, oy = 0;
+        if (lat !== 0) {
+          const dx = bx - ax, dy = by - ay;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len > 0) {
+            // Perpendicular CCW offset
+            ox = (-dy / len) * lat;
+            oy = ( dx / len) * lat;
+          }
+        }
+        ctx.beginPath();
+        ctx.moveTo(ax + ox, ay + oy);
+        ctx.lineTo(bx + ox, by + oy);
+        ctx.stroke();
+      }
 
-      // Per-segment distance labels
+      // Per-segment distance labels (at original midpoint, offset perpendicular)
       for (let j = 1; j < pts.length; j++) {
         const d = dist(pts[j-1].x, pts[j-1].y, pts[j].x, pts[j].y);
         const m = (d / GRID) * app.metersPerCell;
@@ -998,7 +1119,7 @@ function drawPipe() {
       }
     }
 
-    // Waypoint dots
+    // Waypoint dots (at original un-offset positions)
     for (const pt of pts) pipeDot(ctx, pt.x, pt.y, color);
 
     // Trace label badge at first waypoint
