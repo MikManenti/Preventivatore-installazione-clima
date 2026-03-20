@@ -7,11 +7,18 @@ const GRID      = 20;   // pixels per grid cell
 const UNIT_W    = 32;   // AC-unit icon width  (px)
 const UNIT_H    = 22;   // AC-unit icon height (px)
 const WALL_T    = 10;   // wall stroke thickness
+const WALL_FACE = 2;    // black face width on each side of wall (px)
 const PIPE_T    = 2.5;  // pipe stroke thickness
 const HIT_R     = 10;   // hit-test radius (px)
 const SNAP_R    = 8;    // snap-to-unit radius (px)
 const WALL_SNAP_R    = 35; // max distance (px) to snap AC units / pipe points to a wall
 const RESIZE_HANDLE_R = 8; // hit radius for room resize handles (px)
+
+// Colours for up to 3 independent traces / indoor units
+const PIPE_COLORS    = ['#E91E63', '#FF9800', '#9C27B0']; // magenta · orange · purple
+const PIPE_DARK      = ['#880E4F', '#E65100', '#4A148C'];
+const INDOOR_COLORS  = ['#1976D2', '#F57C00', '#7B1FA2'];
+const INDOOR_DARK    = ['#0D47A1', '#BF360C', '#4A148C'];
 
 // ════════════════════════════════════════════════════════════════
 //  Pre-configured templates  (coordinates in grid cells)
@@ -75,14 +82,18 @@ const app = {
   manualWalls: [],   // { x1, y1, x2, y2 }             pixels
 
   // AC units
-  indoorUnit:  null, // { x, y }
-  outdoorUnit: null, // { x, y }
+  indoorUnits: [null], // [{ x, y, angle }, ...]  one per split (up to 3)
+  outdoorUnit: null,   // { x, y, angle }
 
-  // Completed pipe path
-  pipe: [],          // [{ x, y }]
+  // Completed pipe paths (one array per split)
+  pipes:   [[]],   // [[{ x, y }], ...]
 
-  // Pipe being drawn (in-progress)
+  // Pipe being drawn (in-progress) – always for the active split
   pipeWIP: [],       // [{ x, y }]
+
+  // Split / multi-trace state
+  splitType:     1,  // 1=single, 2=dual, 3=trial
+  activePipeIdx: 0,  // which pipe/indoor-unit slot is active (0-2)
 
   // Drawing state
   tool:       'select',
@@ -142,6 +153,11 @@ function init() {
   document.getElementById('clear-all-btn')
     .addEventListener('click', clearAll);
 
+  // Split-configuration buttons
+  document.querySelectorAll('.split-btn').forEach(btn =>
+    btn.addEventListener('click', () => setSplitType(parseInt(btn.dataset.split)))
+  );
+
   // Scale input
   document.getElementById('scale-input')
     .addEventListener('change', e => {
@@ -152,6 +168,7 @@ function init() {
 
   // Load default template
   loadTemplate('bilocale');
+  updateSplitUI();
   updateHint();
 }
 
@@ -205,14 +222,17 @@ function loadTemplate(name) {
     label: r.label,
     color: r.color,
   }));
-  app.manualWalls = [];
-  app.indoorUnit  = null;
-  app.outdoorUnit = null;
-  app.pipe        = [];
-  app.pipeWIP     = [];
+  app.manualWalls  = [];
+  app.indoorUnits  = [null];
+  app.outdoorUnit  = null;
+  app.pipes        = [[]];
+  app.pipeWIP      = [];
+  app.splitType    = 1;
+  app.activePipeIdx = 0;
 
   render();
   updateResults();
+  updateSplitUI();
   setStatus(`Template "${tpl.name}" caricato. Posiziona split interno (❄) e unità esterna (🌡).`);
 }
 
@@ -372,41 +392,47 @@ function snapPipeToWall(rawPt) {
   const sideDot = (rawPt.x - wall.x1) * nx + (rawPt.y - wall.y1) * ny;
   const sign = sideDot >= 0 ? 1 : -1;
 
-  // Snap the projection along the wall to the grid, then offset to wall face
-  const snappedProj = snap(nearest.proj.x, nearest.proj.y);
-  const faceOffset  = WALL_T / 2;
+  // Use the exact projection point (no grid snap along the wall) so the node
+  // lands precisely where the cursor projects onto the wall face.
+  const faceOffset = WALL_T / 2;
 
   return {
-    x: snappedProj.x + sign * nx * faceOffset,
-    y: snappedProj.y + sign * ny * faceOffset,
+    x: nearest.proj.x + sign * nx * faceOffset,
+    y: nearest.proj.y + sign * ny * faceOffset,
   };
 }
 
 // ════════════════════════════════════════════════════════════════
 //  Calculations
 // ════════════════════════════════════════════════════════════════
+/** Returns an array of {meters, crossings} for each active split (null if no pipe). */
 function calculateResults() {
-  const pipe = app.pipe;
-  if (pipe.length < 2) return null;
-
-  // Length
-  let px = 0;
-  for (let i = 1; i < pipe.length; i++)
-    px += dist(pipe[i-1].x, pipe[i-1].y, pipe[i].x, pipe[i].y);
-  const meters = (px / GRID) * app.metersPerCell;
-
-  // Wall crossings
+  const results = [];
   const walls = allWalls();
-  let crossings = 0;
-  for (let i = 1; i < pipe.length; i++) {
-    const { x: ax1, y: ay1 } = pipe[i-1];
-    const { x: ax2, y: ay2 } = pipe[i];
-    for (const w of walls) {
-      if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2))
-        crossings++;
+
+  for (let i = 0; i < app.splitType; i++) {
+    const pipe = app.pipes[i] || [];
+    if (pipe.length < 2) { results.push(null); continue; }
+
+    // Length
+    let px = 0;
+    for (let j = 1; j < pipe.length; j++)
+      px += dist(pipe[j-1].x, pipe[j-1].y, pipe[j].x, pipe[j].y);
+    const meters = (px / GRID) * app.metersPerCell;
+
+    // Wall crossings
+    let crossings = 0;
+    for (let j = 1; j < pipe.length; j++) {
+      const { x: ax1, y: ay1 } = pipe[j-1];
+      const { x: ax2, y: ay2 } = pipe[j];
+      for (const w of walls) {
+        if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2))
+          crossings++;
+      }
     }
+    results.push({ meters, crossings });
   }
-  return { meters, crossings };
+  return results;
 }
 
 function complexityLabel(crossingCount) {
@@ -417,22 +443,42 @@ function complexityLabel(crossingCount) {
 }
 
 function updateResults() {
-  const r  = calculateResults();
-  const el = id => document.getElementById(id);
+  const results = calculateResults();
+  const container = document.getElementById('results-per-trace');
+  if (!container) return;
 
-  if (!r) {
-    el('res-length').textContent     = '—';
-    el('res-walls').textContent      = '—';
-    el('res-complexity').textContent = '—';
-    el('res-complexity').className   = 'res-val';
-    return;
+  container.innerHTML = '';
+  let totalCrossings = 0;
+  let hasAny = false;
+
+  for (let i = 0; i < app.splitType; i++) {
+    const r = results[i];
+    const color = PIPE_COLORS[i];
+    const row = document.createElement('div');
+    row.className = 'res-row';
+    if (r) {
+      hasAny = true;
+      totalCrossings += r.crossings;
+      row.innerHTML =
+        `<span class="res-lbl" style="color:${color};font-weight:700">T${i+1}:</span>` +
+        `<span class="res-val">${r.meters.toFixed(1)} m &nbsp;|&nbsp; ${r.crossings} par.</span>`;
+    } else {
+      row.innerHTML =
+        `<span class="res-lbl" style="color:${color};font-weight:700">T${i+1}:</span>` +
+        `<span class="res-val" style="color:#aaa">—</span>`;
+    }
+    container.appendChild(row);
   }
 
-  el('res-length').textContent     = r.meters.toFixed(1) + ' m';
-  el('res-walls').textContent      = r.crossings;
-  const c = complexityLabel(r.crossings);
-  el('res-complexity').textContent = c.text;
-  el('res-complexity').className   = 'res-val ' + c.cls;
+  const complexityEl = document.getElementById('res-complexity');
+  if (hasAny) {
+    const c = complexityLabel(totalCrossings);
+    complexityEl.textContent = c.text;
+    complexityEl.className   = 'res-val ' + c.cls;
+  } else {
+    complexityEl.textContent = '—';
+    complexityEl.className   = 'res-val';
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -474,12 +520,16 @@ function drawGrid() {
 function drawRooms() {
   const ctx = app.ctx;
   for (const room of app.rooms) {
-    // Fill
+    // Fill room interior
     ctx.fillStyle = room.color || '#f5f5f0';
     ctx.fillRect(room.x, room.y, room.w, room.h);
-    // Border
+    // Outer black border (both faces)
     ctx.strokeStyle = '#2c2c2c';
     ctx.lineWidth   = WALL_T;
+    ctx.strokeRect(room.x, room.y, room.w, room.h);
+    // White interior of wall (leaves WALL_FACE px black on each face)
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth   = WALL_T - WALL_FACE * 2;
     ctx.strokeRect(room.x, room.y, room.w, room.h);
     // Label
     ctx.fillStyle    = '#555';
@@ -505,11 +555,19 @@ function drawWrappedText(ctx, text, cx, cy, maxW, lh) {
 /* ── Manual walls ── */
 function drawManualWalls() {
   const ctx = app.ctx;
-  ctx.strokeStyle = '#2c2c2c';
-  ctx.lineWidth   = WALL_T;
   ctx.lineCap     = 'round';
   ctx.setLineDash([]);
   for (const w of app.manualWalls) {
+    // Outer black faces
+    ctx.strokeStyle = '#2c2c2c';
+    ctx.lineWidth   = WALL_T;
+    ctx.beginPath();
+    ctx.moveTo(w.x1, w.y1);
+    ctx.lineTo(w.x2, w.y2);
+    ctx.stroke();
+    // White interior
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth   = WALL_T - WALL_FACE * 2;
     ctx.beginPath();
     ctx.moveTo(w.x1, w.y1);
     ctx.lineTo(w.x2, w.y2);
@@ -526,17 +584,22 @@ function drawAcUnits() {
   const ctx = app.ctx;
   const hw = UNIT_W / 2, hh = UNIT_H / 2;
 
-  if (app.indoorUnit) {
-    const { x, y, angle = 0 } = app.indoorUnit;
+  // Draw all indoor units (one per active split slot)
+  for (let i = 0; i < app.splitType; i++) {
+    const unit = app.indoorUnits[i];
+    if (!unit) continue;
+    const { x, y, angle = 0 } = unit;
+    const fill   = INDOOR_COLORS[i];
+    const stroke = INDOOR_DARK[i];
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
-    drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, '#1976D2', '#0D47A1');
+    drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, fill, stroke);
     ctx.fillStyle    = '#fff';
-    ctx.font         = 'bold 8px Segoe UI, sans-serif';
+    ctx.font         = 'bold 7px Segoe UI, sans-serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('❄ SPLIT INT.', 0, 0);
+    ctx.fillText(`❄ INT.${i + 1}`, 0, 0);
     ctx.restore();
   }
 
@@ -588,55 +651,78 @@ function roundRect(ctx, x, y, w, h, r) {
   }
 }
 
-/* ── Completed pipe ── */
+/* ── Completed pipes (all active splits) ── */
 function drawPipe() {
-  const pts = app.pipe;
-  if (pts.length === 0) return;
-
   const ctx = app.ctx;
-  ctx.strokeStyle = '#E91E63';
-  ctx.lineWidth   = PIPE_T;
-  ctx.lineCap     = 'round';
-  ctx.lineJoin    = 'round';
-  ctx.setLineDash([]);
 
-  if (pts.length >= 2) {
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.stroke();
+  for (let i = 0; i < app.splitType; i++) {
+    const pts = app.pipes[i] || [];
+    if (pts.length === 0) continue;
 
-    // Per-segment distance labels
-    for (let i = 1; i < pts.length; i++) {
-      const d = dist(pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y);
-      const m = (d / GRID) * app.metersPerCell;
-      if (m >= 0.1) {
-        const mx = (pts[i-1].x + pts[i].x) / 2;
-        const my = (pts[i-1].y + pts[i].y) / 2;
-        drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my);
+    const color     = PIPE_COLORS[i];
+    const darkColor = PIPE_DARK[i];
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = PIPE_T;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+    ctx.setLineDash([]);
+
+    if (pts.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let j = 1; j < pts.length; j++) ctx.lineTo(pts[j].x, pts[j].y);
+      ctx.stroke();
+
+      // Per-segment distance labels
+      for (let j = 1; j < pts.length; j++) {
+        const d = dist(pts[j-1].x, pts[j-1].y, pts[j].x, pts[j].y);
+        const m = (d / GRID) * app.metersPerCell;
+        if (m >= 0.1) {
+          const mx = (pts[j-1].x + pts[j].x) / 2;
+          const my = (pts[j-1].y + pts[j].y) / 2;
+          drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, darkColor);
+        }
       }
     }
-  }
 
-  // Waypoint dots
-  for (const pt of pts) pipeDot(ctx, pt.x, pt.y);
+    // Waypoint dots
+    for (const pt of pts) pipeDot(ctx, pt.x, pt.y, color);
+
+    // Trace label badge at first waypoint
+    drawTraceLabel(ctx, `T${i + 1}`, pts[0].x, pts[0].y, color);
+  }
 }
 
-function pipeDot(ctx, x, y) {
-  ctx.fillStyle = '#E91E63';
+function pipeDot(ctx, x, y, color) {
+  ctx.fillStyle = color || PIPE_COLORS[0];
   ctx.beginPath();
   ctx.arc(x, y, 3.5, 0, Math.PI * 2);
   ctx.fill();
 }
 
-function drawDistLabel(ctx, text, x, y) {
+/** Small coloured badge label (T1 / T2 / T3) above the first waypoint. */
+function drawTraceLabel(ctx, text, x, y, color) {
+  ctx.font = 'bold 9px Segoe UI, sans-serif';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = color;
+  roundRect(ctx, x - tw / 2 - 3, y - 16, tw + 6, 13, 3);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, x, y - 10);
+}
+
+function drawDistLabel(ctx, text, x, y, fgColor) {
+  fgColor = fgColor || '#880E4F';
   ctx.font         = 'bold 9px Segoe UI, sans-serif';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   const tw = ctx.measureText(text).width;
   ctx.fillStyle = 'rgba(255,255,255,.85)';
   ctx.fillRect(x - tw / 2 - 2, y - 7, tw + 4, 14);
-  ctx.fillStyle = '#880E4F';
+  ctx.fillStyle = fgColor;
   ctx.fillText(text, x, y);
 }
 
@@ -720,7 +806,8 @@ function drawInProgress() {
   // Pipe WIP
   if (app.pipeWIP.length > 0) {
     const pts = app.pipeWIP;
-    ctx.strokeStyle = '#E91E63';
+    const color = PIPE_COLORS[app.activePipeIdx];
+    ctx.strokeStyle = color;
     ctx.lineWidth   = PIPE_T;
     ctx.lineCap     = 'round';
     ctx.lineJoin    = 'round';
@@ -729,11 +816,12 @@ function drawInProgress() {
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.stroke();
-    for (const pt of pts) pipeDot(ctx, pt.x, pt.y);
+    for (const pt of pts) pipeDot(ctx, pt.x, pt.y, color);
 
     // Ghost line to snapped cursor (wall-face snap > unit snap > grid snap)
     const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(m) || m;
-    ctx.strokeStyle = 'rgba(233,30,99,.4)';
+    ctx.globalAlpha = 0.4;
+    ctx.strokeStyle = color;
     ctx.lineWidth   = 1.5;
     ctx.setLineDash([5, 3]);
     ctx.beginPath();
@@ -741,6 +829,7 @@ function drawInProgress() {
     ctx.lineTo(pipeCursor.x, pipeCursor.y);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
   }
 
   // Snap cursor dot for drawing tools
@@ -759,8 +848,14 @@ function drawInProgress() {
       ctx.globalAlpha = 0.45;
       ctx.translate(ghost.x, ghost.y);
       ctx.rotate(ghost.angle);
-      const fill   = app.tool === 'placeIndoor' ? '#1976D2' : '#388E3C';
-      const stroke = app.tool === 'placeIndoor' ? '#0D47A1' : '#1B5E20';
+      let fill, stroke;
+      if (app.tool === 'placeIndoor') {
+        fill   = INDOOR_COLORS[app.activePipeIdx];
+        stroke = INDOOR_DARK[app.activePipeIdx];
+      } else {
+        fill   = '#388E3C';
+        stroke = '#1B5E20';
+      }
       drawUnitBox(ctx, -UNIT_W / 2, -UNIT_H / 2, UNIT_W, UNIT_H, fill, stroke);
       ctx.restore();
     }
@@ -853,8 +948,8 @@ function onMouseDown(e) {
         break;
       }
       saveHistory();
-      app.indoorUnit = wallSnap;
-      setStatus('Split interno posizionato. Posiziona ora l\'unità esterna.');
+      app.indoorUnits[app.activePipeIdx] = wallSnap;
+      setStatus(`Split interno ${app.activePipeIdx + 1} posizionato. Posiziona ora l\'unità esterna.`);
       render();
       break;
     }
@@ -1173,12 +1268,14 @@ function startDrag(pos) {
   app.dragging   = false;
   app.dragTarget = null;
 
-  // Indoor unit
-  if (app.indoorUnit &&
-      dist(pos.x, pos.y, app.indoorUnit.x, app.indoorUnit.y) <= UNIT_W / 2 + 4) {
-    app.dragTarget = { type: 'indoor', ox: pos.x - app.indoorUnit.x,
-                                        oy: pos.y - app.indoorUnit.y };
-    return;
+  // Indoor units (all slots)
+  for (let i = 0; i < app.splitType; i++) {
+    const unit = app.indoorUnits[i];
+    if (unit && dist(pos.x, pos.y, unit.x, unit.y) <= UNIT_W / 2 + 4) {
+      app.dragTarget = { type: 'indoor', index: i,
+                          ox: pos.x - unit.x, oy: pos.y - unit.y };
+      return;
+    }
   }
   // Outdoor unit
   if (app.outdoorUnit &&
@@ -1187,13 +1284,15 @@ function startDrag(pos) {
                                          oy: pos.y - app.outdoorUnit.y };
     return;
   }
-  // Pipe waypoints
-  for (let i = 0; i < app.pipe.length; i++) {
-    if (dist(pos.x, pos.y, app.pipe[i].x, app.pipe[i].y) <= HIT_R) {
-      app.dragTarget = { type: 'pipe', index: i,
-                          ox: pos.x - app.pipe[i].x,
-                          oy: pos.y - app.pipe[i].y };
-      return;
+  // Pipe waypoints (all splits)
+  for (let pi = 0; pi < app.splitType; pi++) {
+    const pipe = app.pipes[pi] || [];
+    for (let i = 0; i < pipe.length; i++) {
+      if (dist(pos.x, pos.y, pipe[i].x, pipe[i].y) <= HIT_R) {
+        app.dragTarget = { type: 'pipe', pipeIdx: pi, index: i,
+                            ox: pos.x - pipe[i].x, oy: pos.y - pipe[i].y };
+        return;
+      }
     }
   }
   // Room resize handles (must check before room interior so border handles work)
@@ -1243,7 +1342,7 @@ function moveDrag(pos) {
     case 'indoor': {
       const rawTarget = { x: pos.x - dt.ox, y: pos.y - dt.oy };
       const wallSnap = snapUnitToWall(rawTarget);
-      if (wallSnap) app.indoorUnit = wallSnap;
+      if (wallSnap) app.indoorUnits[dt.index] = wallSnap;
       break;
     }
     case 'outdoor': {
@@ -1252,7 +1351,7 @@ function moveDrag(pos) {
       if (wallSnap) app.outdoorUnit = wallSnap;
       break;
     }
-    case 'pipe':    app.pipe[dt.index] = { x: s.x, y: s.y }; break;
+    case 'pipe':    app.pipes[dt.pipeIdx][dt.index] = { x: s.x, y: s.y }; break;
     case 'room': {
       app.rooms[dt.index].x = s.x;
       app.rooms[dt.index].y = s.y;
@@ -1290,9 +1389,15 @@ function moveDrag(pos) {
 
 function origPos(dt) {
   switch (dt.type) {
-    case 'indoor':  return app.indoorUnit  ? { ...app.indoorUnit }  : null;
+    case 'indoor':  {
+      const u = app.indoorUnits[dt.index];
+      return u ? { ...u } : null;
+    }
     case 'outdoor': return app.outdoorUnit ? { ...app.outdoorUnit } : null;
-    case 'pipe':    return app.pipe[dt.index] ? { ...app.pipe[dt.index] } : null;
+    case 'pipe':    {
+      const pipe = app.pipes[dt.pipeIdx];
+      return pipe && pipe[dt.index] ? { ...pipe[dt.index] } : null;
+    }
     case 'room':    return app.rooms[dt.index]
                            ? { x: app.rooms[dt.index].x, y: app.rooms[dt.index].y }
                            : null;
@@ -1313,9 +1418,11 @@ function origPos(dt) {
 
 // Snap point to indoor/outdoor unit position if within SNAP_R
 function snapToUnit(pt) {
-  if (app.indoorUnit &&
-      dist(pt.x, pt.y, app.indoorUnit.x, app.indoorUnit.y) <= SNAP_R)
-    return { ...app.indoorUnit };
+  for (let i = 0; i < app.splitType; i++) {
+    const unit = app.indoorUnits[i];
+    if (unit && dist(pt.x, pt.y, unit.x, unit.y) <= SNAP_R)
+      return { ...unit };
+  }
   if (app.outdoorUnit &&
       dist(pt.x, pt.y, app.outdoorUnit.x, app.outdoorUnit.y) <= SNAP_R)
     return { ...app.outdoorUnit };
@@ -1328,15 +1435,16 @@ function snapToUnit(pt) {
 function completePipe() {
   if (app.pipeWIP.length < 2) return;
   saveHistory();
-  app.pipe   = [...app.pipeWIP];
+  app.pipes[app.activePipeIdx] = [...app.pipeWIP];
   app.pipeWIP = [];
   syncCompletePipeBtn();
   render();
   updateResults();
   selectTool('select');
-  const r = calculateResults();
+  const results = calculateResults();
+  const r = results[app.activePipeIdx];
   if (r) {
-    setStatus(`✅ Traccia completata: ${r.meters.toFixed(1)} m — ${r.crossings} pareti attraversate.`);
+    setStatus(`✅ Traccia ${app.activePipeIdx + 1} completata: ${r.meters.toFixed(1)} m — ${r.crossings} pareti attraversate.`);
   }
 }
 
@@ -1365,13 +1473,14 @@ function selectTool(tool) {
 }
 
 function updateHint() {
+  const t = app.activePipeIdx + 1;
   const hints = {
     select:      'Clicca e trascina per spostare; doppio-clic su parete/lato stanza per modificare lunghezza',
     drawRoom:    'Trascina per disegnare una stanza',
     drawWall:    'Clic punto iniziale, poi clic punto finale (solo ortogonale)',
-    placeIndoor: 'Clic vicino a una parete per posizionare lo split interno (❄)',
+    placeIndoor: `Clic vicino a una parete per posizionare Split Int. ${t} (❄)`,
     placeOutdoor:'Clic vicino a una parete per posizionare l\'unità esterna (🌡)',
-    drawPipe:    'Clicca i punti del percorso — doppio-clic per completare',
+    drawPipe:    `Traccia ${t}: clicca i punti del percorso — doppio-clic per completare`,
   };
   document.getElementById('tool-hint').textContent = hints[app.tool] || '';
 }
@@ -1394,27 +1503,32 @@ function updateMousePos() {
 //  History (undo)
 // ════════════════════════════════════════════════════════════════
 function saveHistory() {
-  const snap = JSON.stringify({
-    rooms:       app.rooms,
-    manualWalls: app.manualWalls,
-    indoorUnit:  app.indoorUnit,
-    outdoorUnit: app.outdoorUnit,
-    pipe:        app.pipe,
+  const snapshot = JSON.stringify({
+    rooms:         app.rooms,
+    manualWalls:   app.manualWalls,
+    indoorUnits:   app.indoorUnits,
+    outdoorUnit:   app.outdoorUnit,
+    pipes:         app.pipes,
+    splitType:     app.splitType,
+    activePipeIdx: app.activePipeIdx,
   });
-  app.history.push(snap);
+  app.history.push(snapshot);
   if (app.history.length > 40) app.history.shift();
 }
 
 function undo() {
   if (app.history.length === 0) return;
   const prev = JSON.parse(app.history.pop());
-  app.rooms       = prev.rooms;
-  app.manualWalls = prev.manualWalls;
-  app.indoorUnit  = prev.indoorUnit;
-  app.outdoorUnit = prev.outdoorUnit;
-  app.pipe        = prev.pipe;
-  app.pipeWIP     = [];
+  app.rooms         = prev.rooms;
+  app.manualWalls   = prev.manualWalls;
+  app.indoorUnits   = prev.indoorUnits   ?? [null];
+  app.outdoorUnit   = prev.outdoorUnit   ?? null;
+  app.pipes         = prev.pipes         ?? [[]];
+  app.splitType     = prev.splitType     ?? 1;
+  app.activePipeIdx = prev.activePipeIdx ?? 0;
+  app.pipeWIP       = [];
   syncCompletePipeBtn();
+  updateSplitUI();
   render();
   updateResults();
   setStatus('Azione annullata.');
@@ -1425,29 +1539,85 @@ function undo() {
 // ════════════════════════════════════════════════════════════════
 function clearPipe() {
   saveHistory();
-  app.pipe    = [];
+  app.pipes[app.activePipeIdx] = [];
   app.pipeWIP = [];
   syncCompletePipeBtn();
   render();
   updateResults();
-  setStatus('Traccia cancellata.');
+  setStatus(`Traccia ${app.activePipeIdx + 1} cancellata.`);
 }
 
 function clearAll() {
   if (!confirm('Cancellare tutto? Anche la cronologia undo verrà eliminata e non sarà possibile recuperare nulla.')) return;
-  app.rooms       = [];
-  app.manualWalls = [];
-  app.indoorUnit  = null;
-  app.outdoorUnit = null;
-  app.pipe        = [];
-  app.pipeWIP     = [];
-  app.history     = [];
-  app.drawStart   = null;
-  app.wallStart   = null;
+  app.rooms         = [];
+  app.manualWalls   = [];
+  app.indoorUnits   = [null];
+  app.outdoorUnit   = null;
+  app.pipes         = [[]];
+  app.pipeWIP       = [];
+  app.history       = [];
+  app.drawStart     = null;
+  app.wallStart     = null;
+  app.splitType     = 1;
+  app.activePipeIdx = 0;
   syncCompletePipeBtn();
+  updateSplitUI();
   render();
   updateResults();
   setStatus('Canvas cancellato.');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Split / multi-trace management
+// ════════════════════════════════════════════════════════════════
+function setSplitType(n) {
+  if (n === app.splitType) return;
+  saveHistory();
+  app.splitType = n;
+  // Ensure arrays have enough slots
+  while (app.pipes.length < n)        app.pipes.push([]);
+  while (app.indoorUnits.length < n)  app.indoorUnits.push(null);
+  // Clamp active index
+  if (app.activePipeIdx >= n) app.activePipeIdx = n - 1;
+  updateSplitUI();
+  render();
+  updateResults();
+  setStatus(`Configurazione: ${n === 1 ? 'Singolo split' : n === 2 ? 'Dual split' : 'Trial split'}.`);
+}
+
+function setActivePipe(idx) {
+  if (idx < 0 || idx >= app.splitType) return;
+  // Discard WIP silently when switching traces
+  app.pipeWIP = [];
+  syncCompletePipeBtn();
+  app.activePipeIdx = idx;
+  updateSplitUI();
+  updateHint();
+  render();
+}
+
+/** Refresh split-config buttons and trace-selector buttons to match current state. */
+function updateSplitUI() {
+  // Split-type buttons
+  document.querySelectorAll('.split-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.split) === app.splitType);
+  });
+
+  // Trace selector buttons (dynamic)
+  const container = document.getElementById('trace-btns');
+  if (!container) return;
+  container.innerHTML = '';
+  for (let i = 0; i < app.splitType; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'trace-btn' + (i === app.activePipeIdx ? ' active' : '');
+    btn.dataset.trace = i;
+    btn.textContent   = `T${i + 1}`;
+    btn.style.borderColor  = PIPE_COLORS[i];
+    btn.style.color        = i === app.activePipeIdx ? '#fff' : PIPE_COLORS[i];
+    btn.style.background   = i === app.activePipeIdx ? PIPE_COLORS[i] : '#fff';
+    btn.addEventListener('click', () => setActivePipe(i));
+    container.appendChild(btn);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
