@@ -211,6 +211,63 @@ html, body {
 #tool-hint { font-style: italic; }
 
 /* ────────────────────────────────────────────────────────────────
+   Split-configuration buttons
+──────────────────────────────────────────────────────────────── */
+#split-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.split-btn {
+  flex: 1;
+  padding: 5px 2px;
+  border: 1px solid #dadce0;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  transition: background .15s, border-color .15s;
+}
+.split-btn:hover  { background: #e8f0fe; border-color: #4285f4; }
+.split-btn.active {
+  background: #1565C0;
+  border-color: #1565C0;
+  color: #fff;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Active-trace selector buttons  (T1 / T2 / T3)
+──────────────────────────────────────────────────────────────── */
+#trace-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.trace-btn {
+  flex: 1;
+  padding: 4px 2px;
+  border: 2px solid #dadce0;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  transition: background .15s, border-color .15s, color .15s;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Per-trace results row separator
+──────────────────────────────────────────────────────────────── */
+.res-total {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #dadce0;
+}
+
+/* ────────────────────────────────────────────────────────────────
    Results panel
 ──────────────────────────────────────────────────────────────── */
 .results-section { background: #fff; }

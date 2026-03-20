@@ -57,6 +57,18 @@
         </section>
 
         <section class="sb-section">
+          <h3>Configurazione</h3>
+          <div id="split-btns">
+            <button class="split-btn active" data-split="1" title="Singolo split">1 Split</button>
+            <button class="split-btn" data-split="2" title="Dual split">2 Split</button>
+            <button class="split-btn" data-split="3" title="Trial split">3 Split</button>
+          </div>
+          <div id="trace-btns" style="margin-top:5px;">
+            <!-- populated dynamically by JS -->
+          </div>
+        </section>
+
+        <section class="sb-section">
           <h3>Template planimetrie</h3>
           <div id="template-btns">
             <button class="tpl-btn" data-template="studio">Monolocale</button>
@@ -112,19 +124,12 @@
 
         <section class="sb-section results-section">
           <h3>📐 Risultati calcolo</h3>
-          <div id="results-grid">
-            <div class="res-row">
-              <span class="res-lbl">Lunghezza traccia:</span>
-              <span class="res-val" id="res-length">—</span>
-            </div>
-            <div class="res-row">
-              <span class="res-lbl">Pareti attraversate:</span>
-              <span class="res-val" id="res-walls">—</span>
-            </div>
-            <div class="res-row">
-              <span class="res-lbl">Complessità:</span>
-              <span class="res-val" id="res-complexity">—</span>
-            </div>
+          <div id="results-per-trace">
+            <!-- populated dynamically -->
+          </div>
+          <div class="res-row res-total">
+            <span class="res-lbl">Complessità:</span>
+            <span class="res-val" id="res-complexity">—</span>
           </div>
         </section>
 
@@ -135,13 +140,25 @@
               <span class="leg-sw wall-sw"></span>Pareti / Stanze
             </div>
             <div class="leg-item">
-              <span class="leg-sw indoor-sw"></span>Split interno
+              <span class="leg-sw indoor-sw" style="background:#1976D2"></span>Split Int. 1
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw indoor-sw" style="background:#F57C00"></span>Split Int. 2
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw indoor-sw" style="background:#7B1FA2"></span>Split Int. 3
             </div>
             <div class="leg-item">
               <span class="leg-sw outdoor-sw"></span>Unità esterna
             </div>
             <div class="leg-item">
-              <span class="leg-sw pipe-sw"></span>Traccia tubazione
+              <span class="leg-sw" style="background:#E91E63"></span>Traccia 1
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw" style="background:#FF9800"></span>Traccia 2
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw" style="background:#9C27B0"></span>Traccia 3
             </div>
           </div>
         </section>
@@ -150,11 +167,13 @@
           <h3>📋 Guida rapida</h3>
           <ol id="guide">
             <li>Scegli un template <em>oppure</em> disegna stanze / pareti</li>
+            <li>In <strong>Configurazione</strong> scegli <em>1 Split</em>, <em>2 Split</em> o <em>3 Split</em></li>
+            <li>Seleziona la traccia attiva con i pulsanti <strong>T1 / T2 / T3</strong></li>
             <li>Usa <strong>Split Int.</strong> per posizionare lo split <em>vicino a una parete</em></li>
             <li>Usa <strong>U. Esterna</strong> per l'unità esterna <em>vicino a una parete</em></li>
-            <li>Usa <strong>Traccia</strong> e clicca i punti del percorso</li>
+            <li>Usa <strong>Traccia</strong> e clicca i punti del percorso per la traccia attiva</li>
             <li>Doppio-clic (o <em>Completa traccia</em>) per finire la traccia</li>
-            <li>Leggi distanza e pareti attraversate qui a destra</li>
+            <li>Leggi distanza e pareti attraversate (per ogni traccia) qui a destra</li>
             <li>Con <strong>Seleziona</strong>, doppio-clic su una stanza per modificarne larghezza e profondità; doppio-clic su un lato o su una parete per modificarne solo la lunghezza</li>
             <li>Con <strong>Seleziona</strong>, trascina le icone <strong>↕ ↔</strong> al centro di ogni lato della stanza per ridimensionarla liberamente</li>
           </ol>
