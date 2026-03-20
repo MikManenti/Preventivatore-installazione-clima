@@ -86,8 +86,9 @@ const app = {
   ctx:    null,
 
   // Floor-plan data
-  rooms:       [],   // { x, y, w, h, label, color }  pixels
-  manualWalls: [],   // { x1, y1, x2, y2 }             pixels
+  rooms:       [],   // { x, y, w, h, label, color, type? }  pixels  (type: 'room'|'balcony')
+  manualWalls: [],   // { x1, y1, x2, y2 }                   pixels
+  stairs:      [],   // { x, y, w, h, label }                pixels
 
   // AC units
   indoorUnits: [null], // [{ x, y, angle }, ...]  one per split (up to 3)
@@ -276,8 +277,10 @@ function loadTemplate(name) {
     h: r.gh * GRID,
     label: r.label,
     color: r.color,
+    type: r.type || 'room',
   }));
   app.manualWalls  = [];
+  app.stairs       = [];
   app.indoorUnits  = [null];
   app.outdoorUnit  = null;
   app.indoorHeights = [0];
@@ -679,6 +682,7 @@ function render() {
   drawDrillingPoints();
   drawAcUnits();
   drawSpecialUnits();
+  drawStairsLayer();
   drawInProgress();
   drawRoomResizeHandles();
 
@@ -720,19 +724,50 @@ function drawGrid() {
 function drawRooms() {
   const ctx = app.ctx;
   for (const room of app.rooms) {
+    const isBalcony = room.type === 'balcony';
+
     // Fill room interior
-    ctx.fillStyle = room.color || '#f5f5f0';
+    ctx.fillStyle = room.color || (isBalcony ? '#e8f5e9' : '#f5f5f0');
     ctx.fillRect(room.x, room.y, room.w, room.h);
-    // Outer black border (both faces)
-    ctx.strokeStyle = '#2c2c2c';
-    ctx.lineWidth   = WALL_T;
-    ctx.strokeRect(room.x, room.y, room.w, room.h);
-    // White interior of wall (leaves WALL_FACE px black on each face)
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth   = WALL_T - WALL_FACE * 2;
-    ctx.strokeRect(room.x, room.y, room.w, room.h);
+
+    if (isBalcony) {
+      // Diagonal hatch pattern inside balcony
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(room.x, room.y, room.w, room.h);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(76,175,80,0.3)';
+      ctx.lineWidth = 1;
+      const step = GRID;
+      for (let d = -room.h; d < room.w + room.h; d += step) {
+        ctx.beginPath();
+        ctx.moveTo(room.x + d, room.y);
+        ctx.lineTo(room.x + d + room.h, room.y + room.h);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Green dashed border (outer + white stripe)
+      ctx.strokeStyle = '#388E3C';
+      ctx.lineWidth   = WALL_T;
+      ctx.setLineDash([12, 5]);
+      ctx.strokeRect(room.x, room.y, room.w, room.h);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth   = WALL_T - WALL_FACE * 2;
+      ctx.strokeRect(room.x, room.y, room.w, room.h);
+      ctx.setLineDash([]);
+    } else {
+      // Normal solid wall
+      ctx.strokeStyle = '#2c2c2c';
+      ctx.lineWidth   = WALL_T;
+      ctx.strokeRect(room.x, room.y, room.w, room.h);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth   = WALL_T - WALL_FACE * 2;
+      ctx.strokeRect(room.x, room.y, room.w, room.h);
+    }
+
     // Label
-    ctx.fillStyle    = '#555';
+    ctx.fillStyle    = isBalcony ? '#2E7D32' : '#555';
     ctx.font         = '11px Segoe UI, sans-serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
@@ -1058,6 +1093,58 @@ function drawInProgress() {
     }
   }
 
+  // Balcony drag preview
+  if (app.tool === 'drawBalcony' && app.drawStart) {
+    const s  = app.drawStart;
+    const rx = Math.min(s.x, m.x), ry = Math.min(s.y, m.y);
+    const rw = Math.abs(m.x - s.x), rh = Math.abs(m.y - s.y);
+    if (rw > 0 && rh > 0) {
+      ctx.fillStyle = 'rgba(232,245,233,.65)';
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeStyle = '#388E3C';
+      ctx.lineWidth   = WALL_T;
+      ctx.setLineDash([12, 5]);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.setLineDash([]);
+      const mw = (rw / GRID) * app.metersPerCell;
+      const mh = (rh / GRID) * app.metersPerCell;
+      ctx.fillStyle    = '#388E3C';
+      ctx.font         = '10px Segoe UI, sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(mw.toFixed(1) + ' m', rx + rw / 2, ry - 3);
+      ctx.textAlign    = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(mh.toFixed(1) + ' m', rx - 3, ry + rh / 2);
+    }
+  }
+
+  // Stairs drag preview
+  if (app.tool === 'drawStairs' && app.drawStart) {
+    const s  = app.drawStart;
+    const rx = Math.min(s.x, m.x), ry = Math.min(s.y, m.y);
+    const rw = Math.abs(m.x - s.x), rh = Math.abs(m.y - s.y);
+    if (rw > 0 && rh > 0) {
+      ctx.fillStyle = 'rgba(245,240,232,.75)';
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeStyle = '#5d4037';
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.setLineDash([]);
+      const mw = (rw / GRID) * app.metersPerCell;
+      const mh = (rh / GRID) * app.metersPerCell;
+      ctx.fillStyle    = '#5d4037';
+      ctx.font         = '10px Segoe UI, sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(mw.toFixed(1) + ' m', rx + rw / 2, ry - 3);
+      ctx.textAlign    = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(mh.toFixed(1) + ' m', rx - 3, ry + rh / 2);
+    }
+  }
+
   // Wall draw preview
   if (app.tool === 'drawWall' && app.wallStart) {
     const orthoEnd = orthogonalize(app.wallStart, m);
@@ -1134,7 +1221,8 @@ function drawInProgress() {
   }
 
   // Snap cursor dot for drawing tools
-  if (app.tool === 'drawRoom' || app.tool === 'drawWall') {
+  if (app.tool === 'drawRoom' || app.tool === 'drawWall' ||
+      app.tool === 'drawBalcony' || app.tool === 'drawStairs') {
     snapDot(ctx, m.x, m.y);
   } else if (app.tool === 'drawPipe') {
     const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(m) || m;
@@ -1218,9 +1306,58 @@ function drawRoomResizeHandles() {
   }
 }
 
-// ════════════════════════════════════════════════════════════════
-//  Mouse events
-// ════════════════════════════════════════════════════════════════
+/* ── Stairs ── */
+function drawStairsLayer() {
+  const ctx = app.ctx;
+  for (const s of app.stairs) {
+    // Background fill
+    ctx.fillStyle = '#f5f0e8';
+    ctx.fillRect(s.x, s.y, s.w, s.h);
+
+    // Tread lines (one per GRID row)
+    ctx.strokeStyle = '#8d6e63';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([]);
+    for (let y = s.y + GRID; y < s.y + s.h; y += GRID) {
+      ctx.beginPath();
+      ctx.moveTo(s.x, y);
+      ctx.lineTo(s.x + s.w, y);
+      ctx.stroke();
+    }
+
+    // Outer border
+    ctx.strokeStyle = '#5d4037';
+    ctx.lineWidth   = 2;
+    ctx.strokeRect(s.x, s.y, s.w, s.h);
+
+    // Ascent arrow (bottom centre → top centre)
+    const cx  = s.x + s.w / 2;
+    const ay1 = s.y + s.h - GRID * 0.5;
+    const ay2 = s.y + GRID * 0.5;
+    ctx.strokeStyle = '#5d4037';
+    ctx.fillStyle   = '#5d4037';
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx, ay1);
+    ctx.lineTo(cx, ay2);
+    ctx.stroke();
+    // Arrowhead
+    const aSize = 5;
+    ctx.beginPath();
+    ctx.moveTo(cx, ay2);
+    ctx.lineTo(cx - aSize, ay2 + aSize * 1.5);
+    ctx.lineTo(cx + aSize, ay2 + aSize * 1.5);
+    ctx.closePath();
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle    = '#5d4037';
+    ctx.font         = 'bold 9px Segoe UI, sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(s.label || 'Scale', cx, s.y + s.h / 2);
+  }
+}
 function onMouseDown(e) {
   if (e.button === 1) {
     e.preventDefault();
@@ -1239,6 +1376,14 @@ function onMouseDown(e) {
       break;
 
     case 'drawRoom':
+      app.drawStart = s;
+      break;
+
+    case 'drawBalcony':
+      app.drawStart = s;
+      break;
+
+    case 'drawStairs':
       app.drawStart = s;
       break;
 
@@ -1420,8 +1565,39 @@ function onMouseUp(e) {
     const rh = Math.abs(s.y - app.drawStart.y);
     if (rw >= GRID * 2 && rh >= GRID * 2) {
       saveHistory();
-      app.rooms.push({ x: rx, y: ry, w: rw, h: rh, label: 'Stanza', color: '#f5f5f0' });
+      app.rooms.push({ x: rx, y: ry, w: rw, h: rh, label: 'Stanza', color: '#f5f5f0', type: 'room' });
       updateResults();
+    }
+    app.drawStart = null;
+    render();
+  }
+
+  // Finish balcony draw on mouse-up
+  if (app.tool === 'drawBalcony' && app.drawStart) {
+    const s  = snap(getPos(e).x, getPos(e).y);
+    const rx = Math.min(app.drawStart.x, s.x);
+    const ry = Math.min(app.drawStart.y, s.y);
+    const rw = Math.abs(s.x - app.drawStart.x);
+    const rh = Math.abs(s.y - app.drawStart.y);
+    if (rw >= GRID * 2 && rh >= GRID * 2) {
+      saveHistory();
+      app.rooms.push({ x: rx, y: ry, w: rw, h: rh, label: 'Balcone', color: '#e8f5e9', type: 'balcony' });
+      updateResults();
+    }
+    app.drawStart = null;
+    render();
+  }
+
+  // Finish stairs draw on mouse-up
+  if (app.tool === 'drawStairs' && app.drawStart) {
+    const s  = snap(getPos(e).x, getPos(e).y);
+    const rx = Math.min(app.drawStart.x, s.x);
+    const ry = Math.min(app.drawStart.y, s.y);
+    const rw = Math.abs(s.x - app.drawStart.x);
+    const rh = Math.abs(s.y - app.drawStart.y);
+    if (rw >= GRID * 2 && rh >= GRID * 2) {
+      saveHistory();
+      app.stairs.push({ x: rx, y: ry, w: rw, h: rh, label: 'Scale' });
     }
     app.drawStart = null;
     render();
@@ -1467,6 +1643,13 @@ function onDblClick(e) {
       return;
     }
 
+    // Check stair elements
+    const stairIdx = stairAt(raw.x, raw.y);
+    if (stairIdx >= 0) {
+      editStairLabel(stairIdx);
+      return;
+    }
+
     // Check room sides (precise border click → edit one dimension)
     const roomSide = roomSideAt(raw.x, raw.y);
     if (roomSide) {
@@ -1474,7 +1657,7 @@ function onDblClick(e) {
       return;
     }
 
-    // Check room interior (click inside room → edit both dimensions)
+    // Check room interior (click inside room → rename then edit dimensions)
     const roomIdx = roomAt(raw.x, raw.y);
     if (roomIdx >= 0) {
       editRoomDimensions(roomIdx);
@@ -1517,6 +1700,26 @@ function roomAt(px, py) {
     if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return i;
   }
   return -1;
+}
+
+/** Returns index of stair whose interior contains (px,py), or -1 if none. */
+function stairAt(px, py) {
+  for (let i = app.stairs.length - 1; i >= 0; i--) {
+    const s = app.stairs[i];
+    if (px >= s.x && px <= s.x + s.w && py >= s.y && py <= s.y + s.h) return i;
+  }
+  return -1;
+}
+
+/** Prompt user to rename a stair element. */
+function editStairLabel(stairIdx) {
+  const s = app.stairs[stairIdx];
+  const input = prompt('Etichetta scala:', s.label || 'Scale');
+  if (input === null) return;
+  saveHistory();
+  app.stairs[stairIdx].label = input.trim() || 'Scale';
+  render();
+  setStatus(`Scale rinominata: "${app.stairs[stairIdx].label}"`);
 }
 
 /** Prompt user for new length of a manual wall, resize symmetrically around centre. */
@@ -1593,15 +1796,22 @@ function editRoomSideLength(roomIdx, side) {
 }
 
 /**
- * Prompt user for new width and height of a room (centre stays fixed).
+ * Prompt user to rename and/or resize a room (centre stays fixed).
+ * First asks for the label, then for width and height.
  */
 function editRoomDimensions(roomIdx) {
   const r = app.rooms[roomIdx];
+
+  // Step 0: rename
+  const labelInput = prompt('Nome stanza:', r.label);
+  if (labelInput === null) return;  // cancelled
+  const newLabel = labelInput.trim() || r.label;
+
   const currentW = (r.w / GRID) * app.metersPerCell;
   const currentH = (r.h / GRID) * app.metersPerCell;
 
   const wInput = prompt(
-    `Larghezza stanza "${r.label}" (m):\n(attuale: ${currentW.toFixed(2)} m)`,
+    `Larghezza "${newLabel}" (m):\n(attuale: ${currentW.toFixed(2)} m)`,
     currentW.toFixed(2)
   );
   if (wInput === null) return;
@@ -1612,7 +1822,7 @@ function editRoomDimensions(roomIdx) {
   }
 
   const hInput = prompt(
-    `Profondità stanza "${r.label}" (m):\n(attuale: ${currentH.toFixed(2)} m)`,
+    `Profondità "${newLabel}" (m):\n(attuale: ${currentH.toFixed(2)} m)`,
     currentH.toFixed(2)
   );
   if (hInput === null) return;
@@ -1628,13 +1838,14 @@ function editRoomDimensions(roomIdx) {
   saveHistory();
   const cx = r.x + r.w / 2;
   const cy = r.y + r.h / 2;
+  app.rooms[roomIdx].label = newLabel;
   app.rooms[roomIdx].w = newPxW;
   app.rooms[roomIdx].h = newPxH;
   app.rooms[roomIdx].x = Math.round((cx - newPxW / 2) / GRID) * GRID;
   app.rooms[roomIdx].y = Math.round((cy - newPxH / 2) / GRID) * GRID;
   updateResults();
   render();
-  setStatus(`Stanza ridimensionata: ${(newPxW / GRID * app.metersPerCell).toFixed(2)} m × ${(newPxH / GRID * app.metersPerCell).toFixed(2)} m`);
+  setStatus(`Stanza "${newLabel}" aggiornata: ${(newPxW / GRID * app.metersPerCell).toFixed(2)} m × ${(newPxH / GRID * app.metersPerCell).toFixed(2)} m`);
 }
 
 function onKeyDown(e) {
@@ -1715,6 +1926,16 @@ function startDrag(pos) {
       return;
     }
   }
+  // Stairs (interior drag = move)
+  for (let i = app.stairs.length - 1; i >= 0; i--) {
+    const st = app.stairs[i];
+    if (pos.x >= st.x && pos.x <= st.x + st.w &&
+        pos.y >= st.y && pos.y <= st.y + st.h) {
+      app.dragTarget = { type: 'stair', index: i,
+                          ox: pos.x - st.x, oy: pos.y - st.y };
+      return;
+    }
+  }
 }
 
 function moveDrag(pos) {
@@ -1748,6 +1969,11 @@ function moveDrag(pos) {
     case 'room': {
       app.rooms[dt.index].x = s.x;
       app.rooms[dt.index].y = s.y;
+      break;
+    }
+    case 'stair': {
+      app.stairs[dt.index].x = s.x;
+      app.stairs[dt.index].y = s.y;
       break;
     }
     case 'roomResize': {
@@ -1793,6 +2019,9 @@ function origPos(dt) {
     }
     case 'room':    return app.rooms[dt.index]
                            ? { x: app.rooms[dt.index].x, y: app.rooms[dt.index].y }
+                           : null;
+    case 'stair':   return app.stairs[dt.index]
+                           ? { x: app.stairs[dt.index].x, y: app.stairs[dt.index].y }
                            : null;
     case 'roomResize': {
       const r = app.rooms[dt.index];
@@ -1897,8 +2126,10 @@ function selectTool(tool) {
 function updateHint() {
   const t = app.activePipeIdx + 1;
   const hints = {
-    select:          'Clicca e trascina per spostare; doppio-clic su parete/lato stanza per modificare lunghezza',
+    select:          'Clicca e trascina per spostare; doppio-clic su stanza per rinominare/ridimensionare',
     drawRoom:        'Trascina per disegnare una stanza',
+    drawBalcony:     'Trascina per disegnare un balcone (bordo verde tratteggiato)',
+    drawStairs:      'Trascina per disegnare una scala',
     drawWall:        'Clic punto iniziale, poi clic punto finale (solo ortogonale)',
     placeIndoor:     `Clic vicino a una parete per posizionare Split Int. ${t} (❄)`,
     placeOutdoor:    'Clic vicino a una parete per posizionare l\'unità esterna (🌡)',
@@ -1932,6 +2163,7 @@ function saveHistory() {
   const snapshot = JSON.stringify({
     rooms:          app.rooms,
     manualWalls:    app.manualWalls,
+    stairs:         app.stairs,
     indoorUnits:    app.indoorUnits,
     outdoorUnit:    app.outdoorUnit,
     indoorHeights:  app.indoorHeights,
@@ -1955,6 +2187,7 @@ function undo() {
   const prev = JSON.parse(app.history.pop());
   app.rooms         = prev.rooms;
   app.manualWalls   = prev.manualWalls;
+  app.stairs        = prev.stairs        ?? [];
   app.indoorUnits   = prev.indoorUnits   ?? [null];
   app.outdoorUnit   = prev.outdoorUnit   ?? null;
   app.indoorHeights = prev.indoorHeights ?? [0];
@@ -2010,6 +2243,7 @@ function clearAll() {
   if (!confirm('Cancellare tutto? Anche la cronologia undo verrà eliminata e non sarà possibile recuperare nulla.')) return;
   app.rooms         = [];
   app.manualWalls   = [];
+  app.stairs        = [];
   app.indoorUnits   = [null];
   app.outdoorUnit   = null;
   app.indoorHeights = [0];

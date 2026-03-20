@@ -37,6 +37,14 @@
                     title="Trascina per disegnare una stanza">
               <span class="ti">⬜</span><span class="tl">Stanza</span>
             </button>
+            <button class="tool-btn" data-tool="drawBalcony"
+                    title="Trascina per disegnare un balcone">
+              <span class="ti">🌿</span><span class="tl">Balcone</span>
+            </button>
+            <button class="tool-btn" data-tool="drawStairs"
+                    title="Trascina per disegnare una scala">
+              <span class="ti">🪜</span><span class="tl">Scale</span>
+            </button>
             <button class="tool-btn" data-tool="drawWall"
                     title="Clic inizio → clic fine per una parete">
               <span class="ti">━</span><span class="tl">Parete</span>
@@ -184,6 +192,11 @@
               <span class="leg-sw wall-sw"></span>Pareti / Stanze
             </div>
             <div class="leg-item">
+              <span class="leg-sw" style="background:#e8f5e9;border:2px dashed #388E3C"></span>Balcone
+            </div>
+            <div class="leg-item">
+              <span class="leg-sw" style="background:#f5f0e8;border:2px solid #5d4037"></span>Scale
+            <div class="leg-item">
               <span class="leg-sw indoor-sw" style="background:#1976D2"></span>Split Int. 1
             </div>
             <div class="leg-item">
@@ -224,8 +237,10 @@
             <li>Usa <strong>Traccia</strong> e clicca i punti del percorso per la traccia attiva</li>
             <li>Doppio-clic (o <em>Completa traccia</em>) per finire la traccia</li>
             <li>Leggi distanza e pareti attraversate (per ogni traccia) qui a destra</li>
-            <li>Con <strong>Seleziona</strong>, doppio-clic su una stanza per modificarne larghezza e profondità; doppio-clic su un lato o su una parete per modificarne solo la lunghezza</li>
+            <li>Con <strong>Seleziona</strong>, doppio-clic su una stanza per <em>rinominarla</em> e modificarne larghezza e profondità; doppio-clic su un lato o su una parete per modificarne solo la lunghezza</li>
             <li>Con <strong>Seleziona</strong>, trascina le icone <strong>↕ ↔</strong> al centro di ogni lato della stanza per ridimensionarla liberamente</li>
+            <li>Usa <strong>Balcone</strong> per disegnare un'area esterna (bordo verde tratteggiato); doppio-clic per rinominare</li>
+            <li>Usa <strong>Scale</strong> per disegnare un vano scala; doppio-clic per rinominare</li>
           </ol>
           <p class="hint-esc">Premi <kbd>Esc</kbd> per annullare l'operazione corrente. <kbd>Ctrl+Z</kbd> per annullare l'ultima azione.</p>
         </section>
