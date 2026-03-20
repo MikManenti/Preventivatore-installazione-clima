@@ -4,15 +4,19 @@
 //  Constants
 // ════════════════════════════════════════════════════════════════
 const GRID      = 20;   // pixels per grid cell
-const UNIT_W    = 32;   // AC-unit icon width  (px)
+const UNIT_W    = 37;   // AC-unit icon width  (px)
 const UNIT_H    = 22;   // AC-unit icon height (px)
 const WALL_T    = 10;   // wall stroke thickness
 const WALL_FACE = 2;    // black face width on each side of wall (px)
-const PIPE_T    = 2.5;  // pipe stroke thickness
+const PIPE_T    = 4.5;  // pipe stroke thickness
 const HIT_R     = 10;   // hit-test radius (px)
 const SNAP_R    = 8;    // snap-to-unit radius (px)
 const WALL_SNAP_R    = 35; // max distance (px) to snap AC units / pipe points to a wall
 const RESIZE_HANDLE_R = 8; // hit radius for room resize handles (px)
+const LABEL_HIT_MARGIN   = 4;   // extra margin beyond UNIT_W/2 for speech-bubble hit testing (px)
+const DIST_LABEL_OFFSET  = 14;  // perpendicular offset (px) for per-segment distance labels
+const DEFAULT_LABEL_OX   = 0;   // default horizontal offset of speech-bubble label from anchor (px)
+const DEFAULT_LABEL_OY   = -50; // default vertical offset of speech-bubble label from anchor (px)
 
 // Colours for up to 3 independent traces / indoor units
 const PIPE_COLORS    = ['#E91E63', '#FF9800', '#9C27B0']; // magenta · orange · purple
@@ -217,6 +221,9 @@ function init() {
     const el = document.getElementById('mat-' + key);
     if (el) el.addEventListener('change', e => { app.materials[key] = e.target.checked; });
   });
+
+  // Print button
+  document.getElementById('print-btn').addEventListener('click', printReport);
 
   updateHeightUI();
 }
@@ -673,17 +680,21 @@ function render() {
   ctx.translate(app.panX, app.panY);
   ctx.scale(app.zoom, app.zoom);
 
+  // Layer 3 – background: floor plan, walls, AC units, stairs
   drawGrid();
   drawRooms();
   drawRoomWallLabels();
   drawManualWalls();
-  drawPipe();
-  drawPowerCondensaPipes();
-  drawDrillingPoints();
+  drawStairsLayer();
   drawAcUnits();
   drawSpecialUnits();
-  drawStairsLayer();
+  // Layer 2 – pipes (above floor plan)
+  drawPipe();
+  drawPowerCondensaPipes();
   drawInProgress();
+  // Layer 1 – foreground: drilling points always on top of everything
+  drawDrillingPoints();
+  // UI overlays
   drawRoomResizeHandles();
 
   ctx.restore();
@@ -908,13 +919,13 @@ function drawDrillingPoints() {
   const pts = collectDrillingPoints();
   if (pts.length === 0) return;
 
-  const R      = 8;    // outer circle radius (px)
-  const R_FILL = 6;    // inner fill radius (px)
+  const R      = 5;    // outer circle radius (px) → 10 px diameter
+  const R_FILL = 3.5;  // inner fill radius (px)
 
   pts.forEach((pt, idx) => {
     // Outer white halo (improves visibility on dark walls)
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, R + 2, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, R + 1, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
     ctx.fill();
 
@@ -928,38 +939,138 @@ function drawDrillingPoints() {
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, R, 0, Math.PI * 2);
     ctx.strokeStyle = '#CC0000';
-    ctx.lineWidth   = 1.8;
+    ctx.lineWidth   = 1.5;
     ctx.stroke();
 
     // Cross-hair lines inside circle
     ctx.strokeStyle = '#CC0000';
-    ctx.lineWidth   = 1.5;
+    ctx.lineWidth   = 1;
     ctx.beginPath();
-    ctx.moveTo(pt.x - R + 3, pt.y);
-    ctx.lineTo(pt.x + R - 3, pt.y);
-    ctx.moveTo(pt.x, pt.y - R + 3);
-    ctx.lineTo(pt.x, pt.y + R - 3);
+    ctx.moveTo(pt.x - (R - 1), pt.y);
+    ctx.lineTo(pt.x + (R - 1), pt.y);
+    ctx.moveTo(pt.x, pt.y - (R - 1));
+    ctx.lineTo(pt.x, pt.y + (R - 1));
     ctx.stroke();
 
     // Hole number badge (1-indexed)
     const label = String(idx + 1);
-    ctx.font         = 'bold 10px Segoe UI, sans-serif';
+    ctx.font         = 'bold 8px Segoe UI, sans-serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     const tw = ctx.measureText(label).width;
     const bx = pt.x + R + 1;
     const by = pt.y - R - 1;
     ctx.fillStyle = '#CC0000';
-    roundRect(ctx, bx - tw / 2 - 2, by - 5, tw + 4, 10, 2);
+    roundRect(ctx, bx - tw / 2 - 2, by - 4, tw + 4, 9, 2);
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.fillText(label, bx, by);
   });
 }
 
+/**
+ * For each segment of each active refrigerant trace, compute a scalar lateral
+ * offset (px) so that geometrically overlapping segments from different traces
+ * are rendered side-by-side rather than directly on top of each other.
+ *
+ * Two segments from different traces are considered "overlapping" when they are:
+ *  - nearly parallel (|sin angle| ≤ ANGLE_TOL)
+ *  - nearly collinear (perpendicular distance ≤ DIST_TOL)
+ *  - overlapping in projection by at least OVERLAP_MIN px
+ *
+ * Overlapping segments are grouped with union-find; within each group they are
+ * spread evenly centred on their original path.
+ *
+ * Returns offsets[traceIdx][segIdx]  (0 when no overlap).
+ */
+function computePipeRenderOffsets() {
+  const ANGLE_TOL  = 0.08;        // |sin angle| threshold (≈ 4.6°)
+  const DIST_TOL   = GRID / 2;    // max perpendicular distance (px)
+  const OVERLAP_MIN = GRID;       // min projection overlap (px)
+  const SIDE_GAP   = PIPE_T + 4; // center-to-center lateral spacing between parallel traces (px)
+                                  // = pipe width (4.5) + 4 px gap between pipe edges
+
+  // ── build flat segment list ───────────────────────────────────────
+  const segs = [];
+  for (let i = 0; i < app.splitType; i++) {
+    const pts = app.pipes[i] || [];
+    for (let j = 1; j < pts.length; j++) {
+      const ax = pts[j-1].x, ay = pts[j-1].y;
+      const bx = pts[j].x,   by = pts[j].y;
+      const ddx = bx - ax,   ddy = by - ay;
+      const len = Math.sqrt(ddx * ddx + ddy * ddy);
+      if (len < 1) continue;
+      segs.push({ ti: i, si: j - 1, ax, ay, bx, by,
+                  ux: ddx / len, uy: ddy / len, len });
+    }
+  }
+
+  // ── union-find helpers ────────────────────────────────────────────
+  const parent = segs.map((_, k) => k);
+  function find(k) {
+    while (parent[k] !== k) { parent[k] = parent[parent[k]]; k = parent[k]; }
+    return k;
+  }
+  function union(a, b) {
+    a = find(a); b = find(b);
+    if (a !== b) parent[b] = a;
+  }
+
+  // ── detect overlapping segment pairs ─────────────────────────────
+  for (let a = 0; a < segs.length; a++) {
+    for (let b = a + 1; b < segs.length; b++) {
+      const sa = segs[a], sb = segs[b];
+      if (sa.ti === sb.ti) continue;           // same trace – skip
+
+      // parallel?
+      const cross = Math.abs(sa.ux * sb.uy - sa.uy * sb.ux);
+      if (cross > ANGLE_TOL) continue;
+
+      // collinear?  perp-distance from sb.start to the line of sa
+      const perpDist = Math.abs((sb.ax - sa.ax) * (-sa.uy) +
+                                (sb.ay - sa.ay) * ( sa.ux));
+      if (perpDist > DIST_TOL) continue;
+
+      // overlapping projection onto sa's direction?
+      const dot = (x, y) => x * sa.ux + y * sa.uy;
+      const pa0 = dot(sa.ax, sa.ay), pa1 = dot(sa.bx, sa.by);
+      const pb0 = dot(sb.ax, sb.ay), pb1 = dot(sb.bx, sb.by);
+      const oStart = Math.max(Math.min(pa0, pa1), Math.min(pb0, pb1));
+      const oEnd   = Math.min(Math.max(pa0, pa1), Math.max(pb0, pb1));
+      if (oEnd - oStart < OVERLAP_MIN) continue;
+
+      union(a, b);
+    }
+  }
+
+  // One entry per segment (segments = points − 1); empty pipes get zero-length arrays.
+  const offsets = [];
+  for (let i = 0; i < app.splitType; i++) {
+    offsets.push(new Array(Math.max(0, (app.pipes[i] || []).length - 1)).fill(0));
+  }
+
+  const groups = new Map();
+  for (let k = 0; k < segs.length; k++) {
+    const r = find(k);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(k);
+  }
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    members.sort((a, b) => segs[a].ti - segs[b].ti); // stable ordering by trace index
+    const n = members.length;
+    members.forEach((k, idx) => {
+      const { ti, si } = segs[k];
+      offsets[ti][si] = (idx - (n - 1) / 2) * SIDE_GAP;
+    });
+  }
+  return offsets;
+}
+
 /* ── Completed pipes (all active splits) ── */
 function drawPipe() {
   const ctx = app.ctx;
+  const segOffsets = computePipeRenderOffsets();
 
   for (let i = 0; i < app.splitType; i++) {
     const pts = app.pipes[i] || [];
@@ -967,6 +1078,7 @@ function drawPipe() {
 
     const color     = PIPE_COLORS[i];
     const darkColor = PIPE_DARK[i];
+    const segsOff   = segOffsets[i] || [];
 
     ctx.strokeStyle = color;
     ctx.lineWidth   = PIPE_T;
@@ -975,24 +1087,42 @@ function drawPipe() {
     ctx.setLineDash([]);
 
     if (pts.length >= 2) {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let j = 1; j < pts.length; j++) ctx.lineTo(pts[j].x, pts[j].y);
-      ctx.stroke();
+      // Draw each segment individually so per-segment lateral offsets can be applied
+      for (let j = 1; j < pts.length; j++) {
+        const lat = segsOff[j - 1] || 0;
+        const ax = pts[j-1].x, ay = pts[j-1].y;
+        const bx = pts[j].x,   by = pts[j].y;
+        let ox = 0, oy = 0;
+        if (lat !== 0) {
+          const dx = bx - ax, dy = by - ay;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len > 0) {
+            // Perpendicular CCW offset
+            ox = (-dy / len) * lat;
+            oy = ( dx / len) * lat;
+          }
+        }
+        ctx.beginPath();
+        ctx.moveTo(ax + ox, ay + oy);
+        ctx.lineTo(bx + ox, by + oy);
+        ctx.stroke();
+      }
 
-      // Per-segment distance labels
+      // Per-segment distance labels (at original midpoint, offset perpendicular)
       for (let j = 1; j < pts.length; j++) {
         const d = dist(pts[j-1].x, pts[j-1].y, pts[j].x, pts[j].y);
         const m = (d / GRID) * app.metersPerCell;
         if (m >= 0.1) {
           const mx = (pts[j-1].x + pts[j].x) / 2;
           const my = (pts[j-1].y + pts[j].y) / 2;
-          drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, darkColor);
+          const sdx = pts[j].x - pts[j-1].x;
+          const sdy = pts[j].y - pts[j-1].y;
+          drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, darkColor, sdx, sdy);
         }
       }
     }
 
-    // Waypoint dots
+    // Waypoint dots (at original un-offset positions)
     for (const pt of pts) pipeDot(ctx, pt.x, pt.y, color);
 
     // Trace label badge at first waypoint
@@ -1020,16 +1150,27 @@ function drawTraceLabel(ctx, text, x, y, color) {
   ctx.fillText(text, x, y - 10);
 }
 
-function drawDistLabel(ctx, text, x, y, fgColor) {
+function drawDistLabel(ctx, text, x, y, fgColor, segDx, segDy) {
   fgColor = fgColor || '#880E4F';
+  // Offset the label perpendicular to the segment so it doesn't overlap the line
+  let ox = 0, oy = 0;
+  if (segDx !== undefined && segDy !== undefined) {
+    const len = Math.sqrt(segDx * segDx + segDy * segDy);
+    if (len > 0) {
+      // Perpendicular CCW: (-segDy, segDx) normalised × DIST_LABEL_OFFSET px
+      ox = (-segDy / len) * DIST_LABEL_OFFSET;
+      oy = ( segDx / len) * DIST_LABEL_OFFSET;
+    }
+  }
+  const lx = x + ox, ly = y + oy;
   ctx.font         = 'bold 9px Segoe UI, sans-serif';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   const tw = ctx.measureText(text).width;
   ctx.fillStyle = 'rgba(255,255,255,.85)';
-  ctx.fillRect(x - tw / 2 - 2, y - 7, tw + 4, 14);
+  ctx.fillRect(lx - tw / 2 - 2, ly - 7, tw + 4, 14);
   ctx.fillStyle = fgColor;
-  ctx.fillText(text, x, y);
+  ctx.fillText(text, lx, ly);
 }
 
 /** Draw a wall-length label (dark text, white background). */
@@ -1433,7 +1574,7 @@ function onMouseDown(e) {
       const wallSnap = snapUnitToWall(raw);
       if (!wallSnap) { setStatus('⚠ Avvicinati a una parete per posizionare la presa di corrente.'); break; }
       saveHistory();
-      app.powerOutlet = wallSnap;
+      app.powerOutlet = { ...wallSnap, labelOx: DEFAULT_LABEL_OX, labelOy: DEFAULT_LABEL_OY };
       setStatus('🔌 Presa di corrente posizionata.');
       render();
       break;
@@ -1443,7 +1584,7 @@ function onMouseDown(e) {
       const wallSnap = snapUnitToWall(raw);
       if (!wallSnap) { setStatus('⚠ Avvicinati a una parete per posizionare lo scarico condensa.'); break; }
       saveHistory();
-      app.condensateDrain = wallSnap;
+      app.condensateDrain = { ...wallSnap, labelOx: DEFAULT_LABEL_OX, labelOy: DEFAULT_LABEL_OY };
       setStatus('💧 Scarico condensa posizionato.');
       render();
       break;
@@ -1536,6 +1677,21 @@ function updateSelectCursor(pos) {
     const map = { top: 'ns-resize', bottom: 'ns-resize', left: 'ew-resize', right: 'ew-resize' };
     app.canvas.style.cursor = map[app.dragTarget.side] || 'default';
     return;
+  }
+  // Hover over outlet/drain label boxes
+  if (app.powerOutlet) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    if (dist(pos.x, pos.y, x + labelOx, y + labelOy) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.canvas.style.cursor = 'move';
+      return;
+    }
+  }
+  if (app.condensateDrain) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    if (dist(pos.x, pos.y, x + labelOx, y + labelOy) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.canvas.style.cursor = 'move';
+      return;
+    }
   }
   // Hover over resize handle
   for (const room of app.rooms) {
@@ -1875,7 +2031,7 @@ function startDrag(pos) {
   // Indoor units (all slots)
   for (let i = 0; i < app.splitType; i++) {
     const unit = app.indoorUnits[i];
-    if (unit && dist(pos.x, pos.y, unit.x, unit.y) <= UNIT_W / 2 + 4) {
+    if (unit && dist(pos.x, pos.y, unit.x, unit.y) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
       app.dragTarget = { type: 'indoor', index: i,
                           ox: pos.x - unit.x, oy: pos.y - unit.y };
       return;
@@ -1883,10 +2039,28 @@ function startDrag(pos) {
   }
   // Outdoor unit
   if (app.outdoorUnit &&
-      dist(pos.x, pos.y, app.outdoorUnit.x, app.outdoorUnit.y) <= UNIT_W / 2 + 4) {
+      dist(pos.x, pos.y, app.outdoorUnit.x, app.outdoorUnit.y) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
     app.dragTarget = { type: 'outdoor', ox: pos.x - app.outdoorUnit.x,
                                          oy: pos.y - app.outdoorUnit.y };
     return;
+  }
+  // Power outlet label box
+  if (app.powerOutlet) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    const lx = x + labelOx, ly = y + labelOy;
+    if (dist(pos.x, pos.y, lx, ly) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.dragTarget = { type: 'outletLabel', ox: pos.x - lx, oy: pos.y - ly };
+      return;
+    }
+  }
+  // Condensate drain label box
+  if (app.condensateDrain) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    const lx = x + labelOx, ly = y + labelOy;
+    if (dist(pos.x, pos.y, lx, ly) <= UNIT_W / 2 + LABEL_HIT_MARGIN) {
+      app.dragTarget = { type: 'drainLabel', ox: pos.x - lx, oy: pos.y - ly };
+      return;
+    }
   }
   // Pipe waypoints (all splits)
   for (let pi = 0; pi < app.splitType; pi++) {
@@ -1966,6 +2140,20 @@ function moveDrag(pos) {
       break;
     }
     case 'pipe':    app.pipes[dt.pipeIdx][dt.index] = { x: s.x, y: s.y }; break;
+    case 'outletLabel': {
+      if (app.powerOutlet) {
+        app.powerOutlet.labelOx = pos.x - dt.ox - app.powerOutlet.x;
+        app.powerOutlet.labelOy = pos.y - dt.oy - app.powerOutlet.y;
+      }
+      break;
+    }
+    case 'drainLabel': {
+      if (app.condensateDrain) {
+        app.condensateDrain.labelOx = pos.x - dt.ox - app.condensateDrain.x;
+        app.condensateDrain.labelOy = pos.y - dt.oy - app.condensateDrain.y;
+      }
+      break;
+    }
     case 'room': {
       app.rooms[dt.index].x = s.x;
       app.rooms[dt.index].y = s.y;
@@ -2016,6 +2204,16 @@ function origPos(dt) {
     case 'pipe':    {
       const pipe = app.pipes[dt.pipeIdx];
       return pipe && pipe[dt.index] ? { ...pipe[dt.index] } : null;
+    }
+    case 'outletLabel': {
+      if (!app.powerOutlet) return null;
+      const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+      return { x: x + labelOx, y: y + labelOy };
+    }
+    case 'drainLabel': {
+      if (!app.condensateDrain) return null;
+      const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+      return { x: x + labelOx, y: y + labelOy };
     }
     case 'room':    return app.rooms[dt.index]
                            ? { x: app.rooms[dt.index].x, y: app.rooms[dt.index].y }
@@ -2411,8 +2609,35 @@ function drawSpecialUnits() {
   const hw = UNIT_W / 2, hh = UNIT_H / 2;
 
   if (app.powerOutlet) {
-    const { x, y, angle = 0 } = app.powerOutlet;
-    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    const { x, y, angle = 0, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    const lx = x + labelOx, ly = y + labelOy;
+
+    // Anchor marker at wall position
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = POWER_COLOR;
+    ctx.strokeStyle = POWER_DARK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Connecting line from anchor to label
+    ctx.strokeStyle = POWER_DARK;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(lx, ly);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label box (speech bubble)
+    ctx.save();
+    ctx.translate(lx, ly);
     drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, POWER_COLOR, POWER_DARK);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 7px Segoe UI, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -2421,8 +2646,35 @@ function drawSpecialUnits() {
   }
 
   if (app.condensateDrain) {
-    const { x, y, angle = 0 } = app.condensateDrain;
-    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    const { x, y, angle = 0, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    const lx = x + labelOx, ly = y + labelOy;
+
+    // Anchor marker at wall position
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = CONDENSA_COLOR;
+    ctx.strokeStyle = CONDENSA_DARK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Connecting line from anchor to label
+    ctx.strokeStyle = CONDENSA_DARK;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(lx, ly);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label box (speech bubble)
+    ctx.save();
+    ctx.translate(lx, ly);
     drawUnitBox(ctx, -hw, -hh, UNIT_W, UNIT_H, CONDENSA_COLOR, CONDENSA_DARK);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 7px Segoe UI, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -2449,7 +2701,9 @@ function drawPowerCondensaPipes() {
       if (m >= 0.1) {
         const mx = (toDraw[j-1].x + toDraw[j].x) / 2;
         const my = (toDraw[j-1].y + toDraw[j].y) / 2;
-        drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, dark);
+        const sdx = toDraw[j].x - toDraw[j-1].x;
+        const sdy = toDraw[j].y - toDraw[j-1].y;
+        drawDistLabel(ctx, m.toFixed(1) + ' m', mx, my, dark, sdx, sdy);
       }
     }
     for (const pt of toDraw) pipeDot(ctx, pt.x, pt.y, color);
@@ -2515,6 +2769,327 @@ function detectPowerPipeConnection() {
     }
   }
   return null;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Print utility
+// ════════════════════════════════════════════════════════════════
+
+/** Minimal HTML-escape for safe injection into the print template. */
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Compute the bounding box (canvas pixels, world-space) of all drawn content.
+ * Returns { x, y, w, h } or null if nothing is drawn yet.
+ */
+function getContentBoundingBox() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const exp = (x, y) => {
+    if (x < minX) minX = x;  if (y < minY) minY = y;
+    if (x > maxX) maxX = x;  if (y > maxY) maxY = y;
+  };
+  const halfW = WALL_T / 2;
+  for (const r of app.rooms) {
+    exp(r.x - halfW, r.y - halfW);
+    exp(r.x + r.w + halfW, r.y + r.h + halfW);
+  }
+  for (const w of app.manualWalls) { exp(w.x1, w.y1); exp(w.x2, w.y2); }
+  for (const s of app.stairs)      { exp(s.x, s.y); exp(s.x + s.w, s.y + s.h); }
+  for (const u of app.indoorUnits) {
+    if (u) { exp(u.x - UNIT_W, u.y - UNIT_H); exp(u.x + UNIT_W, u.y + UNIT_H); }
+  }
+  if (app.outdoorUnit) {
+    const { x, y } = app.outdoorUnit;
+    exp(x - UNIT_W, y - UNIT_H); exp(x + UNIT_W, y + UNIT_H);
+  }
+  if (app.powerOutlet) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    exp(x, y); exp(x + labelOx, y + labelOy);
+  }
+  if (app.condensateDrain) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    exp(x, y); exp(x + labelOx, y + labelOy);
+  }
+  for (let i = 0; i < app.splitType; i++)
+    for (const p of (app.pipes[i] || [])) exp(p.x, p.y);
+  for (const p of app.powerPipe)      exp(p.x, p.y);
+  for (const p of app.condensatePipe) exp(p.x, p.y);
+
+  return isFinite(minX) ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null;
+}
+
+/**
+ * Render the complete floor plan (without in-progress lines or UI handles) to
+ * an offscreen canvas scaled so the content fits TARGET_W pixels wide.
+ * Returns a PNG data-URL, or null when nothing has been drawn yet.
+ */
+function renderPrintCanvas() {
+  const bbox = getContentBoundingBox();
+  if (!bbox || bbox.w < 1 || bbox.h < 1) return null;
+
+  const PAD      = GRID * 3;    // padding around content (px world-space)
+  const TARGET_W = 1400;        // output canvas pixel width (high-res for quality)
+
+  const cw    = bbox.w + PAD * 2;
+  const ch    = bbox.h + PAD * 2;
+  const scale = TARGET_W / cw;
+
+  const offCanvas    = document.createElement('canvas');
+  offCanvas.width    = TARGET_W;
+  offCanvas.height   = Math.ceil(ch * scale);
+
+  // Save current render state
+  const savedCtx    = app.ctx;
+  const savedCanvas = app.canvas;
+  const savedZoom   = app.zoom;
+  const savedPanX   = app.panX;
+  const savedPanY   = app.panY;
+
+  // Override render state to target the offscreen canvas
+  app.ctx    = offCanvas.getContext('2d');
+  app.canvas = offCanvas;
+  app.zoom   = scale;
+  app.panX   = -(bbox.x - PAD) * scale;
+  app.panY   = -(bbox.y - PAD) * scale;
+
+  app.ctx.save();
+  app.ctx.translate(app.panX, app.panY);
+  app.ctx.scale(app.zoom, app.zoom);
+
+  // Draw all permanent layers (same order as render(), minus in-progress / handles)
+  drawGrid();
+  drawRooms();
+  drawRoomWallLabels();
+  drawManualWalls();
+  drawStairsLayer();
+  drawAcUnits();
+  drawSpecialUnits();
+  drawPipe();
+  drawPowerCondensaPipes();
+  drawDrillingPoints();
+
+  app.ctx.restore();
+
+  const dataURL = offCanvas.toDataURL('image/png');
+
+  // Restore render state
+  app.ctx    = savedCtx;
+  app.canvas = savedCanvas;
+  app.zoom   = savedZoom;
+  app.panX   = savedPanX;
+  app.panY   = savedPanY;
+
+  return dataURL;
+}
+
+/**
+ * Build the full HTML string for the A4 print window.
+ * @param {string} customerName
+ * @param {string} dateStr       Formatted date string
+ * @param {string|null} dataURL  PNG data-URL of the floor plan (or null)
+ */
+function buildPrintHTML(customerName, dateStr, dataURL) {
+  const results   = calculateResults();
+  const pcResults = calculatePowerCondensaResults();
+
+  // ── Trace summary table ────────────────────────────────────────
+  const hasAnyTrace = results.some(r => r !== null) || pcResults.power || pcResults.condensa;
+  const showDelta   = results.some(r => r && r.heightDiff > 0) ||
+                      (pcResults.power && (pcResults.power.heightDiff || 0) > 0);
+
+  let traceRows = '';
+  for (let i = 0; i < app.splitType; i++) {
+    const r     = results[i];
+    const color = PIPE_COLORS[i];
+    if (r) {
+      traceRows += `<tr>
+        <td style="color:${color};font-weight:700">T${i + 1}</td>
+        <td>${r.meters.toFixed(1)} m</td>
+        ${showDelta ? `<td>${r.heightDiff > 0 ? r.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
+        <td>${r.crossings}</td>
+      </tr>`;
+    } else {
+      traceRows += `<tr>
+        <td style="color:${color};font-weight:700">T${i + 1}</td>
+        <td colspan="${showDelta ? 3 : 2}" style="color:#aaa">—</td>
+      </tr>`;
+    }
+  }
+  if (pcResults.power) {
+    const pm = pcResults.power;
+    traceRows += `<tr>
+      <td style="color:${POWER_COLOR};font-weight:700">⚡ Corrente</td>
+      <td>${(pm.totalMeters != null ? pm.totalMeters : pm.meters).toFixed(1)} m</td>
+      ${showDelta ? `<td>${(pm.heightDiff || 0) > 0 ? pm.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
+      <td>${pm.crossings}</td>
+    </tr>`;
+  }
+  if (pcResults.condensa) {
+    const cm = pcResults.condensa;
+    traceRows += `<tr>
+      <td style="color:${CONDENSA_COLOR};font-weight:700">💧 Condensa</td>
+      <td>${cm.meters.toFixed(1)} m</td>
+      ${showDelta ? '<td>—</td>' : ''}
+      <td>${cm.crossings}</td>
+    </tr>`;
+  }
+
+  const traceTableHTML = hasAnyTrace ? `
+    <h2 class="sec-title">📐 Lunghezze tracce</h2>
+    <table>
+      <thead><tr>
+        <th>Traccia</th>
+        <th>Lunghezza tracciato</th>
+        ${showDelta ? '<th>Δh altezze</th>' : ''}
+        <th>Fori parete</th>
+      </tr></thead>
+      <tbody>${traceRows}</tbody>
+    </table>` : '';
+
+  // ── Drilling-point summary ─────────────────────────────────────
+  const drillingPts  = collectDrillingPoints();
+  const totalHoles   = drillingPts.length;
+  const complexity   = complexityLabel(totalHoles);
+  const holesHTML    = totalHoles > 0
+    ? `<p class="info-row">🔩 <strong>Fori totali nelle pareti: ${totalHoles}</strong> — ${complexity.text}</p>`
+    : '';
+
+  // ── Materials / works ──────────────────────────────────────────
+  const MAT_LABELS = {
+    staffaUE:         'Staffa unità esterna',
+    lavaggioImpianto: 'Lavaggio impianto',
+    predisposizione:  'Predisposizione'
+  };
+  const checkedMats = MATERIALS_KEYS.filter(k => app.materials[k]);
+  const materialsHTML = checkedMats.length > 0 ? `
+    <h2 class="sec-title">🔧 Materiali / Lavorazioni</h2>
+    <ul class="mat-list">
+      ${checkedMats.map(k => `<li>${MAT_LABELS[k]}</li>`).join('')}
+    </ul>` : '';
+
+  // ── Floor plan image ───────────────────────────────────────────
+  const imgHTML = dataURL
+    ? `<img src="${dataURL}" alt="Planimetria" class="floor-img" />`
+    : `<p style="color:#aaa;text-align:center">(nessuna planimetria disegnata)</p>`;
+
+  const safeCustomer = _escHtml(customerName || '—');
+  const safeDate     = _escHtml(dateStr);
+
+  return `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Preventivo${customerName ? ' \u2014 ' + _escHtml(customerName) : ''}</title>
+  <style>
+    @page { size: A4 portrait; margin: 15mm; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 10.5pt;
+      color: #202124;
+      background: #fff;
+    }
+    /* Header */
+    .print-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      border-bottom: 3px solid #1565C0;
+      padding-bottom: 6px;
+      margin-bottom: 10px;
+    }
+    .app-name { font-size: 13pt; font-weight: 700; color: #1565C0; }
+    .meta     { text-align: right; font-size: 10pt; line-height: 1.6; }
+    .meta .customer { font-weight: 700; font-size: 11.5pt; }
+    /* Floor plan */
+    .floor-wrap { text-align: center; margin-bottom: 10px; }
+    .floor-img  { max-width: 100%; border: 1px solid #dadce0; display: block; margin: 0 auto; }
+    /* Summary */
+    .sec-title {
+      font-size: 11pt; font-weight: 700; color: #1565C0;
+      margin: 10px 0 5px; border-bottom: 1px solid #dadce0; padding-bottom: 3px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; margin-bottom: 6px; }
+    th { background: #1565C0; color: #fff; padding: 5px 8px; text-align: left; }
+    td { border: 1px solid #dadce0; padding: 4px 8px; }
+    tr:nth-child(even) td { background: #f8f9fa; }
+    .info-row  { margin: 6px 0; font-size: 10.5pt; }
+    .mat-list  { padding-left: 18px; font-size: 10pt; line-height: 1.9; }
+    /* Footer */
+    .print-footer {
+      margin-top: 14px; text-align: center;
+      font-size: 8.5pt; color: #80868b;
+      border-top: 1px solid #dadce0; padding-top: 4px;
+    }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-header">
+    <div class="app-name">🏠 Preventivatore Installazione Climatizzatore</div>
+    <div class="meta">
+      <div class="customer">Cliente: ${safeCustomer}</div>
+      <div>Data: ${safeDate}</div>
+    </div>
+  </div>
+
+  <div class="floor-wrap">${imgHTML}</div>
+
+  <div class="summary">
+    ${traceTableHTML}
+    ${holesHTML}
+    ${materialsHTML}
+  </div>
+
+  <div class="print-footer">
+    Documento generato automaticamente — ${safeDate}
+  </div>
+
+  <script>
+    // Auto-open print dialog once the image has loaded
+    (function () {
+      var img = document.querySelector('.floor-img');
+      if (img) {
+        img.addEventListener('load', function () { setTimeout(window.print, 300); });
+      } else {
+        setTimeout(window.print, 300);
+      }
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+/**
+ * Ask for customer name, render floor plan, build HTML and open print dialog.
+ * Triggered by the 🖨 Stampa A4 button.
+ */
+function printReport() {
+  const customerName = prompt('Nome del cliente (Invio per lasciare vuoto):', '');
+  if (customerName === null) return; // user pressed Cancel
+
+  const dateStr = new Date().toLocaleDateString('it-IT', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+  const dataURL = renderPrintCanvas();
+  const html    = buildPrintHTML(customerName.trim(), dateStr, dataURL);
+
+  const pw = window.open('', '_blank', 'width=960,height=820,menubar=yes,toolbar=yes');
+  if (!pw) {
+    alert('Il browser ha bloccato il popup.\nAbilita i popup per questo sito e riprova.');
+    return;
+  }
+  pw.document.open();
+  pw.document.write(html);
+  pw.document.close();
 }
 
 // ════════════════════════════════════════════════════════════════
