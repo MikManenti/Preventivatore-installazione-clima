@@ -38,7 +38,7 @@ html, body {
 }
 
 .header-left { display: flex; align-items: center; gap: 10px; }
-.header-logo { font-size: 22px; }
+.header-logo-img { height: 38px; width: auto; display: block; }
 #app-header h1 { font-size: 15px; font-weight: 600; letter-spacing: .3px; }
 
 #status-bar {

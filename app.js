@@ -6,7 +6,7 @@
 const GRID      = 20;   // pixels per grid cell
 const UNIT_W    = 37;   // AC-unit icon width  (px)
 const UNIT_H    = 22;   // AC-unit icon height (px)
-const WALL_T    = 10;   // wall stroke thickness
+const WALL_T    = 12;   // wall stroke thickness
 const WALL_FACE = 2;    // black face width on each side of wall (px)
 const PIPE_T    = 4.5;  // pipe stroke thickness
 const HIT_R     = 10;   // hit-test radius (px)
@@ -31,6 +31,9 @@ const CONDENSA_DARK  = '#006064';
 
 // Keys for the materials/works checklist (used in init, undo, clearAll)
 const MATERIALS_KEYS = ['staffaUE', 'lavaggioImpianto', 'predisposizione'];
+
+// Logo data-URL (preloaded at startup for embedding in print)
+let LOGO_DATA_URL = null;
 
 // ════════════════════════════════════════════════════════════════
 //  Pre-configured templates  (coordinates in grid cells)
@@ -226,6 +229,26 @@ function init() {
   document.getElementById('print-btn').addEventListener('click', printReport);
 
   updateHeightUI();
+
+  // Preload logo for print
+  preloadLogo();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Logo preload (for embedding in print)
+// ════════════════════════════════════════════════════════════════
+function preloadLogo() {
+  const img = new Image();
+  img.onload = function() {
+    try {
+      const c = document.createElement('canvas');
+      c.width  = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      LOGO_DATA_URL = c.toDataURL('image/png');
+    } catch (e) { console.warn('Logo preload failed:', e); }
+  };
+  img.src = 'logo.svg';
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -433,12 +456,14 @@ function countUnifiedCrossings(pipes, walls) {
  * Points closer than GRID/2 px to an existing entry are merged into one.
  * Returns [{x, y}, ...].
  */
-function collectDrillingPoints() {
+function collectDrillingPoints(mainOnly = false) {
   const walls = allWalls();
   const pts = [];
   for (let i = 0; i < app.splitType; i++) _addPipeCrossings(app.pipes[i], walls, pts);
-  _addPipeCrossings(app.powerPipe,      walls, pts);
-  _addPipeCrossings(app.condensatePipe, walls, pts);
+  if (!mainOnly) {
+    _addPipeCrossings(app.powerPipe,      walls, pts);
+    _addPipeCrossings(app.condensatePipe, walls, pts);
+  }
   return pts;
 }
 
@@ -919,8 +944,8 @@ function drawDrillingPoints() {
   const pts = collectDrillingPoints();
   if (pts.length === 0) return;
 
-  const R      = 5;    // outer circle radius (px) → 10 px diameter
-  const R_FILL = 3.5;  // inner fill radius (px)
+  const R      = 7;    // outer circle radius (px) → 14 px diameter
+  const R_FILL = 5.5;  // inner fill radius (px)
 
   pts.forEach((pt, idx) => {
     // Outer white halo (improves visibility on dark walls)
@@ -1332,7 +1357,7 @@ function drawInProgress() {
   if (app.powerPipeWIP.length > 0) {
     const pts = app.powerPipeWIP;
     ctx.strokeStyle = POWER_COLOR; ctx.lineWidth = PIPE_T; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.setLineDash([8, 4]);
+    ctx.setLineDash([12, 6]);
     ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.stroke(); ctx.setLineDash([]);
@@ -1347,7 +1372,7 @@ function drawInProgress() {
   if (app.condensatePipeWIP.length > 0) {
     const pts = app.condensatePipeWIP;
     ctx.strokeStyle = CONDENSA_COLOR; ctx.lineWidth = PIPE_T; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.setLineDash([8, 4]);
+    ctx.setLineDash([12, 6]);
     ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.stroke(); ctx.setLineDash([]);
@@ -2688,7 +2713,7 @@ function drawPowerCondensaPipes() {
     if (toDraw.length < 2) return;
     ctx.strokeStyle = color; ctx.lineWidth = PIPE_T;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.setLineDash([8, 4]);
+    ctx.setLineDash([12, 6]);
     ctx.beginPath(); ctx.moveTo(toDraw[0].x, toDraw[0].y);
     for (let j = 1; j < toDraw.length; j++) ctx.lineTo(toDraw[j].x, toDraw[j].y);
     ctx.stroke(); ctx.setLineDash([]);
@@ -2830,7 +2855,7 @@ function renderPrintCanvas() {
   const bbox = getContentBoundingBox();
   if (!bbox || bbox.w < 1 || bbox.h < 1) return null;
 
-  const PAD      = GRID * 3;    // padding around content (px world-space)
+  const PAD      = GRID * 1;    // padding around content (px world-space)
   const TARGET_W = 1400;        // output canvas pixel width (high-res for quality)
 
   const cw    = bbox.w + PAD * 2;
@@ -2950,7 +2975,7 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
     </table>` : '';
 
   // ── Drilling-point summary ─────────────────────────────────────
-  const drillingPts  = collectDrillingPoints();
+  const drillingPts  = collectDrillingPoints(true);  // only main refrigerant holes for total count
   const totalHoles   = drillingPts.length;
   const complexity   = complexityLabel(totalHoles);
   const holesHTML    = totalHoles > 0
@@ -3031,7 +3056,7 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
 </head>
 <body>
   <div class="print-header">
-    <div class="app-name">🏠 Preventivatore Installazione Climatizzatore</div>
+    <div class="app-name">${LOGO_DATA_URL ? `<img src="${LOGO_DATA_URL}" alt="Logo" style="height:56px;width:auto;display:block;margin-bottom:2px" />` : ''}Preventivatore Installazione Climatizzatore</div>
     <div class="meta">
       <div class="customer">Cliente: ${safeCustomer}</div>
       <div>Data: ${safeDate}</div>
