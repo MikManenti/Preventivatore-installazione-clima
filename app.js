@@ -222,6 +222,9 @@ function init() {
     if (el) el.addEventListener('change', e => { app.materials[key] = e.target.checked; });
   });
 
+  // Print button
+  document.getElementById('print-btn').addEventListener('click', printReport);
+
   updateHeightUI();
 }
 
@@ -2766,6 +2769,327 @@ function detectPowerPipeConnection() {
     }
   }
   return null;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Print utility
+// ════════════════════════════════════════════════════════════════
+
+/** Minimal HTML-escape for safe injection into the print template. */
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Compute the bounding box (canvas pixels, world-space) of all drawn content.
+ * Returns { x, y, w, h } or null if nothing is drawn yet.
+ */
+function getContentBoundingBox() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const exp = (x, y) => {
+    if (x < minX) minX = x;  if (y < minY) minY = y;
+    if (x > maxX) maxX = x;  if (y > maxY) maxY = y;
+  };
+  const halfW = WALL_T / 2;
+  for (const r of app.rooms) {
+    exp(r.x - halfW, r.y - halfW);
+    exp(r.x + r.w + halfW, r.y + r.h + halfW);
+  }
+  for (const w of app.manualWalls) { exp(w.x1, w.y1); exp(w.x2, w.y2); }
+  for (const s of app.stairs)      { exp(s.x, s.y); exp(s.x + s.w, s.y + s.h); }
+  for (const u of app.indoorUnits) {
+    if (u) { exp(u.x - UNIT_W, u.y - UNIT_H); exp(u.x + UNIT_W, u.y + UNIT_H); }
+  }
+  if (app.outdoorUnit) {
+    const { x, y } = app.outdoorUnit;
+    exp(x - UNIT_W, y - UNIT_H); exp(x + UNIT_W, y + UNIT_H);
+  }
+  if (app.powerOutlet) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.powerOutlet;
+    exp(x, y); exp(x + labelOx, y + labelOy);
+  }
+  if (app.condensateDrain) {
+    const { x, y, labelOx = DEFAULT_LABEL_OX, labelOy = DEFAULT_LABEL_OY } = app.condensateDrain;
+    exp(x, y); exp(x + labelOx, y + labelOy);
+  }
+  for (let i = 0; i < app.splitType; i++)
+    for (const p of (app.pipes[i] || [])) exp(p.x, p.y);
+  for (const p of app.powerPipe)      exp(p.x, p.y);
+  for (const p of app.condensatePipe) exp(p.x, p.y);
+
+  return isFinite(minX) ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null;
+}
+
+/**
+ * Render the complete floor plan (without in-progress lines or UI handles) to
+ * an offscreen canvas scaled so the content fits TARGET_W pixels wide.
+ * Returns a PNG data-URL, or null when nothing has been drawn yet.
+ */
+function renderPrintCanvas() {
+  const bbox = getContentBoundingBox();
+  if (!bbox || bbox.w < 1 || bbox.h < 1) return null;
+
+  const PAD      = GRID * 3;    // padding around content (px world-space)
+  const TARGET_W = 1400;        // output canvas pixel width (high-res for quality)
+
+  const cw    = bbox.w + PAD * 2;
+  const ch    = bbox.h + PAD * 2;
+  const scale = TARGET_W / cw;
+
+  const offCanvas    = document.createElement('canvas');
+  offCanvas.width    = TARGET_W;
+  offCanvas.height   = Math.ceil(ch * scale);
+
+  // Save current render state
+  const savedCtx    = app.ctx;
+  const savedCanvas = app.canvas;
+  const savedZoom   = app.zoom;
+  const savedPanX   = app.panX;
+  const savedPanY   = app.panY;
+
+  // Override render state to target the offscreen canvas
+  app.ctx    = offCanvas.getContext('2d');
+  app.canvas = offCanvas;
+  app.zoom   = scale;
+  app.panX   = -(bbox.x - PAD) * scale;
+  app.panY   = -(bbox.y - PAD) * scale;
+
+  app.ctx.save();
+  app.ctx.translate(app.panX, app.panY);
+  app.ctx.scale(app.zoom, app.zoom);
+
+  // Draw all permanent layers (same order as render(), minus in-progress / handles)
+  drawGrid();
+  drawRooms();
+  drawRoomWallLabels();
+  drawManualWalls();
+  drawStairsLayer();
+  drawAcUnits();
+  drawSpecialUnits();
+  drawPipe();
+  drawPowerCondensaPipes();
+  drawDrillingPoints();
+
+  app.ctx.restore();
+
+  const dataURL = offCanvas.toDataURL('image/png');
+
+  // Restore render state
+  app.ctx    = savedCtx;
+  app.canvas = savedCanvas;
+  app.zoom   = savedZoom;
+  app.panX   = savedPanX;
+  app.panY   = savedPanY;
+
+  return dataURL;
+}
+
+/**
+ * Build the full HTML string for the A4 print window.
+ * @param {string} customerName
+ * @param {string} dateStr       Formatted date string
+ * @param {string|null} dataURL  PNG data-URL of the floor plan (or null)
+ */
+function buildPrintHTML(customerName, dateStr, dataURL) {
+  const results   = calculateResults();
+  const pcResults = calculatePowerCondensaResults();
+
+  // ── Trace summary table ────────────────────────────────────────
+  const hasAnyTrace = results.some(r => r !== null) || pcResults.power || pcResults.condensa;
+  const showDelta   = results.some(r => r && r.heightDiff > 0) ||
+                      (pcResults.power && (pcResults.power.heightDiff || 0) > 0);
+
+  let traceRows = '';
+  for (let i = 0; i < app.splitType; i++) {
+    const r     = results[i];
+    const color = PIPE_COLORS[i];
+    if (r) {
+      traceRows += `<tr>
+        <td style="color:${color};font-weight:700">T${i + 1}</td>
+        <td>${r.meters.toFixed(1)} m</td>
+        ${showDelta ? `<td>${r.heightDiff > 0 ? r.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
+        <td>${r.crossings}</td>
+      </tr>`;
+    } else {
+      traceRows += `<tr>
+        <td style="color:${color};font-weight:700">T${i + 1}</td>
+        <td colspan="${showDelta ? 3 : 2}" style="color:#aaa">—</td>
+      </tr>`;
+    }
+  }
+  if (pcResults.power) {
+    const pm = pcResults.power;
+    traceRows += `<tr>
+      <td style="color:${POWER_COLOR};font-weight:700">⚡ Corrente</td>
+      <td>${(pm.totalMeters != null ? pm.totalMeters : pm.meters).toFixed(1)} m</td>
+      ${showDelta ? `<td>${(pm.heightDiff || 0) > 0 ? pm.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
+      <td>${pm.crossings}</td>
+    </tr>`;
+  }
+  if (pcResults.condensa) {
+    const cm = pcResults.condensa;
+    traceRows += `<tr>
+      <td style="color:${CONDENSA_COLOR};font-weight:700">💧 Condensa</td>
+      <td>${cm.meters.toFixed(1)} m</td>
+      ${showDelta ? '<td>—</td>' : ''}
+      <td>${cm.crossings}</td>
+    </tr>`;
+  }
+
+  const traceTableHTML = hasAnyTrace ? `
+    <h2 class="sec-title">📐 Lunghezze tracce</h2>
+    <table>
+      <thead><tr>
+        <th>Traccia</th>
+        <th>Lunghezza tracciato</th>
+        ${showDelta ? '<th>Δh altezze</th>' : ''}
+        <th>Fori parete</th>
+      </tr></thead>
+      <tbody>${traceRows}</tbody>
+    </table>` : '';
+
+  // ── Drilling-point summary ─────────────────────────────────────
+  const drillingPts  = collectDrillingPoints();
+  const totalHoles   = drillingPts.length;
+  const complexity   = complexityLabel(totalHoles);
+  const holesHTML    = totalHoles > 0
+    ? `<p class="info-row">🔩 <strong>Fori totali nelle pareti: ${totalHoles}</strong> — ${complexity.text}</p>`
+    : '';
+
+  // ── Materials / works ──────────────────────────────────────────
+  const MAT_LABELS = {
+    staffaUE:         'Staffa unità esterna',
+    lavaggioImpianto: 'Lavaggio impianto',
+    predisposizione:  'Predisposizione'
+  };
+  const checkedMats = MATERIALS_KEYS.filter(k => app.materials[k]);
+  const materialsHTML = checkedMats.length > 0 ? `
+    <h2 class="sec-title">🔧 Materiali / Lavorazioni</h2>
+    <ul class="mat-list">
+      ${checkedMats.map(k => `<li>${MAT_LABELS[k]}</li>`).join('')}
+    </ul>` : '';
+
+  // ── Floor plan image ───────────────────────────────────────────
+  const imgHTML = dataURL
+    ? `<img src="${dataURL}" alt="Planimetria" class="floor-img" />`
+    : `<p style="color:#aaa;text-align:center">(nessuna planimetria disegnata)</p>`;
+
+  const safeCustomer = _escHtml(customerName || '—');
+  const safeDate     = _escHtml(dateStr);
+
+  return `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Preventivo${customerName ? ' \u2014 ' + _escHtml(customerName) : ''}</title>
+  <style>
+    @page { size: A4 portrait; margin: 15mm; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 10.5pt;
+      color: #202124;
+      background: #fff;
+    }
+    /* Header */
+    .print-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      border-bottom: 3px solid #1565C0;
+      padding-bottom: 6px;
+      margin-bottom: 10px;
+    }
+    .app-name { font-size: 13pt; font-weight: 700; color: #1565C0; }
+    .meta     { text-align: right; font-size: 10pt; line-height: 1.6; }
+    .meta .customer { font-weight: 700; font-size: 11.5pt; }
+    /* Floor plan */
+    .floor-wrap { text-align: center; margin-bottom: 10px; }
+    .floor-img  { max-width: 100%; border: 1px solid #dadce0; display: block; margin: 0 auto; }
+    /* Summary */
+    .sec-title {
+      font-size: 11pt; font-weight: 700; color: #1565C0;
+      margin: 10px 0 5px; border-bottom: 1px solid #dadce0; padding-bottom: 3px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; margin-bottom: 6px; }
+    th { background: #1565C0; color: #fff; padding: 5px 8px; text-align: left; }
+    td { border: 1px solid #dadce0; padding: 4px 8px; }
+    tr:nth-child(even) td { background: #f8f9fa; }
+    .info-row  { margin: 6px 0; font-size: 10.5pt; }
+    .mat-list  { padding-left: 18px; font-size: 10pt; line-height: 1.9; }
+    /* Footer */
+    .print-footer {
+      margin-top: 14px; text-align: center;
+      font-size: 8.5pt; color: #80868b;
+      border-top: 1px solid #dadce0; padding-top: 4px;
+    }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-header">
+    <div class="app-name">🏠 Preventivatore Installazione Climatizzatore</div>
+    <div class="meta">
+      <div class="customer">Cliente: ${safeCustomer}</div>
+      <div>Data: ${safeDate}</div>
+    </div>
+  </div>
+
+  <div class="floor-wrap">${imgHTML}</div>
+
+  <div class="summary">
+    ${traceTableHTML}
+    ${holesHTML}
+    ${materialsHTML}
+  </div>
+
+  <div class="print-footer">
+    Documento generato automaticamente — ${safeDate}
+  </div>
+
+  <script>
+    // Auto-open print dialog once the image has loaded
+    (function () {
+      var img = document.querySelector('.floor-img');
+      if (img) {
+        img.addEventListener('load', function () { setTimeout(window.print, 300); });
+      } else {
+        setTimeout(window.print, 300);
+      }
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+/**
+ * Ask for customer name, render floor plan, build HTML and open print dialog.
+ * Triggered by the 🖨 Stampa A4 button.
+ */
+function printReport() {
+  const customerName = prompt('Nome del cliente (Invio per lasciare vuoto):', '');
+  if (customerName === null) return; // user pressed Cancel
+
+  const dateStr = new Date().toLocaleDateString('it-IT', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+  const dataURL = renderPrintCanvas();
+  const html    = buildPrintHTML(customerName.trim(), dateStr, dataURL);
+
+  const pw = window.open('', '_blank', 'width=960,height=820,menubar=yes,toolbar=yes');
+  if (!pw) {
+    alert('Il browser ha bloccato il popup.\nAbilita i popup per questo sito e riprova.');
+    return;
+  }
+  pw.document.open();
+  pw.document.write(html);
+  pw.document.close();
 }
 
 // ════════════════════════════════════════════════════════════════

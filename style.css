@@ -178,6 +178,12 @@ html, body {
 }
 .act-btn.primary:hover:not(:disabled) { background: #1976D2; }
 .act-btn.danger:hover { background: #fce8e6; border-color: #d93025; color: #d93025; }
+.act-btn.print {
+  border-color: #00796B;
+  color: #00796B;
+  margin-top: 4px;
+}
+.act-btn.print:hover { background: #e0f2f1; border-color: #004D40; color: #004D40; }
 
 /* ────────────────────────────────────────────────────────────────
    Canvas area
