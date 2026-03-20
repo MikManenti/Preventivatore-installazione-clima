@@ -184,6 +184,51 @@ html, body {
   margin-top: 4px;
 }
 .act-btn.print:hover { background: #e0f2f1; border-color: #004D40; color: #004D40; }
+.act-btn.save {
+  border-color: #2E7D32;
+  color: #2E7D32;
+}
+.act-btn.save:hover { background: #e8f5e9; border-color: #1B5E20; color: #1B5E20; }
+
+/* ────────────────────────────────────────────────────────────────
+   Saved projects list
+──────────────────────────────────────────────────────────────── */
+#saved-projects-list { display: flex; flex-direction: column; gap: 4px; }
+.no-projects { font-size: 11px; color: #999; text-align: center; padding: 4px 0; }
+
+.saved-project-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 5px;
+  padding: 4px 6px;
+  gap: 4px;
+}
+.proj-info { flex: 1; min-width: 0; }
+.proj-name {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proj-date { display: block; font-size: 9px; color: #888; }
+.proj-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.proj-load-btn,
+.proj-delete-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: background .15s;
+}
+.proj-load-btn:hover   { background: #e8f0fe; }
+.proj-delete-btn:hover { background: #fce8e6; }
 
 /* ────────────────────────────────────────────────────────────────
    Canvas area

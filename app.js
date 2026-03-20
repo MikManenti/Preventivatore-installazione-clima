@@ -228,10 +228,16 @@ function init() {
   // Print button
   document.getElementById('print-btn').addEventListener('click', printReport);
 
+  // Save project button
+  document.getElementById('save-project-btn').addEventListener('click', saveProject);
+
   updateHeightUI();
 
   // Preload logo for print
   preloadLogo();
+
+  // Populate saved-projects list
+  renderProjectsList();
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -3112,6 +3118,153 @@ function printReport() {
   pw.document.open();
   pw.document.write(html);
   pw.document.close();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Saved Projects  (localStorage)
+// ════════════════════════════════════════════════════════════════
+const PROJECTS_KEY = 'climaProjects';
+
+function getStoredProjects() {
+  try { return JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+
+function _saveStoredProjects(projects) {
+  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+}
+
+/** Snapshot the current app state (same fields as saveHistory). */
+function _projectSnapshot() {
+  return JSON.stringify({
+    rooms:           app.rooms,
+    manualWalls:     app.manualWalls,
+    stairs:          app.stairs,
+    indoorUnits:     app.indoorUnits,
+    outdoorUnit:     app.outdoorUnit,
+    indoorHeights:   app.indoorHeights,
+    outdoorHeight:   app.outdoorHeight,
+    pipes:           app.pipes,
+    splitType:       app.splitType,
+    activePipeIdx:   app.activePipeIdx,
+    materials:       app.materials,
+    powerOutlet:     app.powerOutlet,
+    outletHeight:    app.outletHeight,
+    condensateDrain: app.condensateDrain,
+    powerPipe:       app.powerPipe,
+    condensatePipe:  app.condensatePipe,
+    metersPerCell:   app.metersPerCell,
+  });
+}
+
+function saveProject() {
+  const name = prompt('Nome del progetto:', '');
+  if (name === null) return; // cancelled
+  const projectName = name.trim() || 'Progetto senza nome';
+
+  const project = {
+    id:      Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    name:    projectName,
+    savedAt: Date.now(),
+    state:   _projectSnapshot(),
+  };
+
+  const projects = getStoredProjects();
+  projects.unshift(project); // newest first
+  _saveStoredProjects(projects);
+  renderProjectsList();
+  setStatus(`Progetto "${projectName}" salvato.`);
+}
+
+function loadProject(id) {
+  const projects = getStoredProjects();
+  const project  = projects.find(p => p.id === id);
+  if (!project) return;
+
+  if (!confirm(`Caricare il progetto "${project.name}"?\nLe modifiche non salvate andranno perse.`)) return;
+
+  saveHistory(); // allow undo back to current state
+
+  try {
+    const s = JSON.parse(project.state);
+    app.rooms            = s.rooms            ?? [];
+    app.manualWalls      = s.manualWalls      ?? [];
+    app.stairs           = s.stairs           ?? [];
+    app.indoorUnits      = s.indoorUnits      ?? [null];
+    app.outdoorUnit      = s.outdoorUnit      ?? null;
+    app.indoorHeights    = s.indoorHeights    ?? [0];
+    app.outdoorHeight    = s.outdoorHeight    ?? 0;
+    app.pipes            = s.pipes            ?? [[]];
+    app.splitType        = s.splitType        ?? 1;
+    app.activePipeIdx    = s.activePipeIdx    ?? 0;
+    app.materials        = s.materials        ?? { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+    app.powerOutlet      = s.powerOutlet      ?? null;
+    app.outletHeight     = s.outletHeight     ?? 0;
+    app.condensateDrain  = s.condensateDrain  ?? null;
+    app.powerPipe        = s.powerPipe        ?? [];
+    app.condensatePipe   = s.condensatePipe   ?? [];
+    app.metersPerCell    = s.metersPerCell     ?? 0.5;
+    app.pipeWIP          = [];
+    app.powerPipeWIP     = [];
+    app.condensatePipeWIP = [];
+
+    // Sync materials checkboxes
+    MATERIALS_KEYS.forEach(key => {
+      const el = document.getElementById('mat-' + key);
+      if (el) el.checked = app.materials[key] || false;
+    });
+
+    // Sync scale input
+    const scaleInput = document.getElementById('scale-input');
+    if (scaleInput) scaleInput.value = app.metersPerCell;
+
+    syncCompletePipeBtn();
+    updateSplitUI();
+    updateHeightUI();
+    render();
+    updateResults();
+    setStatus(`Progetto "${project.name}" caricato.`);
+  } catch (e) {
+    console.error('loadProject error:', e);
+    setStatus('Errore nel caricamento del progetto.');
+  }
+}
+
+function deleteProject(id) {
+  const projects = getStoredProjects();
+  const project  = projects.find(p => p.id === id);
+  if (!project) return;
+  if (!confirm(`Eliminare il progetto "${project.name}"?`)) return;
+  _saveStoredProjects(projects.filter(p => p.id !== id));
+  renderProjectsList();
+  setStatus(`Progetto "${project.name}" eliminato.`);
+}
+
+function renderProjectsList() {
+  const container = document.getElementById('saved-projects-list');
+  if (!container) return;
+  const projects = getStoredProjects();
+  container.innerHTML = '';
+  if (projects.length === 0) {
+    container.innerHTML = '<p class="no-projects">Nessun progetto salvato.</p>';
+    return;
+  }
+  for (const p of projects) {
+    const item = document.createElement('div');
+    item.className = 'saved-project-item';
+    item.innerHTML =
+      `<div class="proj-info">` +
+        `<span class="proj-name">${_escHtml(p.name)}</span>` +
+        `<span class="proj-date">${_escHtml(new Date(p.savedAt).toLocaleString('it-IT'))}</span>` +
+      `</div>` +
+      `<div class="proj-actions">` +
+        `<button class="proj-load-btn" title="Carica progetto">📂</button>` +
+        `<button class="proj-delete-btn" title="Elimina progetto">🗑</button>` +
+      `</div>`;
+    item.querySelector('.proj-load-btn').addEventListener('click', () => loadProject(p.id));
+    item.querySelector('.proj-delete-btn').addEventListener('click', () => deleteProject(p.id));
+    container.appendChild(item);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
