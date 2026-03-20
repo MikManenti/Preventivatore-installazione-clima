@@ -6,11 +6,12 @@
 const GRID      = 20;   // pixels per grid cell
 const UNIT_W    = 32;   // AC-unit icon width  (px)
 const UNIT_H    = 22;   // AC-unit icon height (px)
-const WALL_T    = 3;    // wall stroke thickness
+const WALL_T    = 10;   // wall stroke thickness
 const PIPE_T    = 2.5;  // pipe stroke thickness
 const HIT_R     = 10;   // hit-test radius (px)
 const SNAP_R    = 8;    // snap-to-unit radius (px)
-const WALL_SNAP_R = 35; // max distance (px) to snap AC units to a wall
+const WALL_SNAP_R    = 35; // max distance (px) to snap AC units / pipe points to a wall
+const RESIZE_HANDLE_R = 8; // hit radius for room resize handles (px)
 
 // ════════════════════════════════════════════════════════════════
 //  Pre-configured templates  (coordinates in grid cells)
@@ -338,12 +339,46 @@ function snapUnitToWall(rawPt) {
   // perpendicular offset so the unit cannot overlap the wall after rounding.
   // UNIT_H is the unit's narrow ("depth") dimension when it is rotated to face the wall.
   const snappedProj = snap(nearest.proj.x, nearest.proj.y);
-  const perpOffset  = UNIT_H / 2 + WALL_T + 1; // safe gap: half-depth + full stroke + 1 px
+  const perpOffset  = UNIT_H / 2 + WALL_T / 2 + 2; // safe gap: half-depth + half-wall + 2 px
 
   return {
     x: snappedProj.x + sign * nx * perpOffset,
     y: snappedProj.y + sign * ny * perpOffset,
     angle,
+  };
+}
+
+/**
+ * Snap a pipe point to the face of the nearest wall within WALL_SNAP_R.
+ * Returns {x, y} snapped to the wall surface nearest to rawPt, or null if
+ * no wall is within range (allowing free placement unlike AC-unit snapping).
+ */
+function snapPipeToWall(rawPt) {
+  const nearest = findNearestWall(rawPt);
+  if (!nearest || nearest.d > WALL_SNAP_R) return null;
+
+  const { wall } = nearest;
+  const dx = wall.x2 - wall.x1, dy = wall.y2 - wall.y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+
+  if (len < 1e-10) {
+    return snap(nearest.proj.x, nearest.proj.y);
+  }
+
+  // Perpendicular unit normal (90° CCW from wall direction)
+  const nx = -dy / len, ny = dx / len;
+
+  // Which side of the wall is the cursor on?
+  const sideDot = (rawPt.x - wall.x1) * nx + (rawPt.y - wall.y1) * ny;
+  const sign = sideDot >= 0 ? 1 : -1;
+
+  // Snap the projection along the wall to the grid, then offset to wall face
+  const snappedProj = snap(nearest.proj.x, nearest.proj.y);
+  const faceOffset  = WALL_T / 2;
+
+  return {
+    x: snappedProj.x + sign * nx * faceOffset,
+    y: snappedProj.y + sign * ny * faceOffset,
   };
 }
 
@@ -414,6 +449,7 @@ function render() {
   drawPipe();
   drawAcUnits();
   drawInProgress();
+  drawRoomResizeHandles();
   updateMousePos();
 }
 
@@ -695,20 +731,24 @@ function drawInProgress() {
     ctx.stroke();
     for (const pt of pts) pipeDot(ctx, pt.x, pt.y);
 
-    // Ghost line to snapped cursor
+    // Ghost line to snapped cursor (wall-face snap > unit snap > grid snap)
+    const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(m) || m;
     ctx.strokeStyle = 'rgba(233,30,99,.4)';
     ctx.lineWidth   = 1.5;
     ctx.setLineDash([5, 3]);
     ctx.beginPath();
     ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
-    ctx.lineTo(m.x, m.y);
+    ctx.lineTo(pipeCursor.x, pipeCursor.y);
     ctx.stroke();
     ctx.setLineDash([]);
   }
 
   // Snap cursor dot for drawing tools
-  if (['drawRoom', 'drawWall', 'drawPipe'].includes(app.tool)) {
+  if (app.tool === 'drawRoom' || app.tool === 'drawWall') {
     snapDot(ctx, m.x, m.y);
+  } else if (app.tool === 'drawPipe') {
+    const pipeCursor = snapPipeToWall(app.mouse) || snapToUnit(m) || m;
+    snapDot(ctx, pipeCursor.x, pipeCursor.y);
   }
 
   // Ghost unit preview while hovering with placement tools
@@ -735,6 +775,41 @@ function snapDot(ctx, x, y) {
   ctx.arc(x, y, 5, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
+}
+
+/** Returns the four resize handle descriptors for a room. */
+function roomResizeHandles(r) {
+  return [
+    { side: 'top',    x: r.x + r.w / 2, y: r.y,           icon: '↕', cursor: 'ns-resize' },
+    { side: 'right',  x: r.x + r.w,     y: r.y + r.h / 2, icon: '↔', cursor: 'ew-resize' },
+    { side: 'bottom', x: r.x + r.w / 2, y: r.y + r.h,     icon: '↕', cursor: 'ns-resize' },
+    { side: 'left',   x: r.x,           y: r.y + r.h / 2, icon: '↔', cursor: 'ew-resize' },
+  ];
+}
+
+/** Draw resize handles at the midpoint of each room wall (only in select mode). */
+function drawRoomResizeHandles() {
+  if (app.tool !== 'select') return;
+  const ctx = app.ctx;
+  const hw = 14, hh = 14;
+
+  for (const room of app.rooms) {
+    for (const h of roomResizeHandles(room)) {
+      // Background square
+      ctx.fillStyle   = 'rgba(21,101,192,0.85)';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth   = 1.5;
+      roundRect(ctx, h.x - hw / 2, h.y - hh / 2, hw, hh, 3);
+      ctx.fill();
+      ctx.stroke();
+      // Arrow icon
+      ctx.fillStyle    = '#fff';
+      ctx.font         = 'bold 11px sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(h.icon, h.x, h.y);
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -798,8 +873,9 @@ function onMouseDown(e) {
     }
 
     case 'drawPipe': {
-      // Snap to indoor/outdoor unit if close
-      const snappedPt = snapToUnit(s) || s;
+      // Snap priority: wall face > AC unit > grid
+      const wallSnap  = snapPipeToWall(raw);
+      const snappedPt = wallSnap || snapToUnit(s) || s;
       const now = Date.now();
       const last = app._lastPipeClick;
 
@@ -827,6 +903,33 @@ function onMouseMove(e) {
 
   render();
   updateMousePos();
+
+  // Update cursor
+  if (app.tool === 'select') {
+    updateSelectCursor(app.mouse);
+  } else {
+    app.canvas.style.cursor = '';  // fall back to CSS crosshair
+  }
+}
+
+/** Update the canvas cursor while the select tool is active. */
+function updateSelectCursor(pos) {
+  // Keep resize cursor while actively dragging a resize handle
+  if (app.dragTarget && app.dragTarget.type === 'roomResize') {
+    const map = { top: 'ns-resize', bottom: 'ns-resize', left: 'ew-resize', right: 'ew-resize' };
+    app.canvas.style.cursor = map[app.dragTarget.side] || 'default';
+    return;
+  }
+  // Hover over resize handle
+  for (const room of app.rooms) {
+    for (const h of roomResizeHandles(room)) {
+      if (dist(pos.x, pos.y, h.x, h.y) <= RESIZE_HANDLE_R + 4) {
+        app.canvas.style.cursor = h.cursor;
+        return;
+      }
+    }
+  }
+  app.canvas.style.cursor = 'default';
 }
 
 function onMouseUp(e) {
@@ -1093,7 +1196,24 @@ function startDrag(pos) {
       return;
     }
   }
-  // Rooms
+  // Room resize handles (must check before room interior so border handles work)
+  for (let i = 0; i < app.rooms.length; i++) {
+    const r = app.rooms[i];
+    for (const h of roomResizeHandles(r)) {
+      if (dist(pos.x, pos.y, h.x, h.y) <= RESIZE_HANDLE_R) {
+        app.dragTarget = {
+          type: 'roomResize',
+          index: i,
+          side: h.side,
+          ox: pos.x - h.x,
+          oy: pos.y - h.y,
+          orig: { x: r.x, y: r.y, w: r.w, h: r.h },
+        };
+        return;
+      }
+    }
+  }
+  // Rooms (interior drag = move)
   for (let i = app.rooms.length - 1; i >= 0; i--) {
     const r = app.rooms[i];
     if (pos.x >= r.x && pos.x <= r.x + r.w &&
@@ -1138,6 +1258,33 @@ function moveDrag(pos) {
       app.rooms[dt.index].y = s.y;
       break;
     }
+    case 'roomResize': {
+      const orig = dt.orig;
+      const MIN  = GRID * 2;
+      switch (dt.side) {
+        case 'top': {
+          const newY = Math.min(s.y, orig.y + orig.h - MIN);
+          app.rooms[dt.index].y = newY;
+          app.rooms[dt.index].h = orig.y + orig.h - newY;
+          break;
+        }
+        case 'bottom': {
+          app.rooms[dt.index].h = Math.max(MIN, s.y - orig.y);
+          break;
+        }
+        case 'left': {
+          const newX = Math.min(s.x, orig.x + orig.w - MIN);
+          app.rooms[dt.index].x = newX;
+          app.rooms[dt.index].w = orig.x + orig.w - newX;
+          break;
+        }
+        case 'right': {
+          app.rooms[dt.index].w = Math.max(MIN, s.x - orig.x);
+          break;
+        }
+      }
+      break;
+    }
   }
 }
 
@@ -1149,6 +1296,17 @@ function origPos(dt) {
     case 'room':    return app.rooms[dt.index]
                            ? { x: app.rooms[dt.index].x, y: app.rooms[dt.index].y }
                            : null;
+    case 'roomResize': {
+      const r = app.rooms[dt.index];
+      if (!r) return null;
+      switch (dt.side) {
+        case 'top':    return { x: r.x + r.w / 2, y: r.y };
+        case 'bottom': return { x: r.x + r.w / 2, y: r.y + r.h };
+        case 'left':   return { x: r.x,            y: r.y + r.h / 2 };
+        case 'right':  return { x: r.x + r.w,      y: r.y + r.h / 2 };
+      }
+      return null;
+    }
   }
   return null;
 }
