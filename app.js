@@ -374,13 +374,11 @@ function segIntersectionPoint(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
 }
 
 /**
- * Count unique wall crossings for a single pipe path.
- * Two intersections within GRID/2 px are merged into one hole,
- * preventing overlapping collinear room-wall segments from being
- * counted as multiple holes at the same physical location.
+ * Append crossing points from a single pipe into an existing `pts` array,
+ * deduplicating within GRID/2 px. Shared by counting and drawing helpers.
  */
-function countUniqueCrossings(pipe, walls) {
-  const pts = [];
+function _addPipeCrossings(pipe, walls, pts) {
+  if (!pipe || pipe.length < 2) return;
   for (let j = 1; j < pipe.length; j++) {
     const { x: ax1, y: ay1 } = pipe[j - 1];
     const { x: ax2, y: ay2 } = pipe[j];
@@ -392,6 +390,17 @@ function countUniqueCrossings(pipe, walls) {
       }
     }
   }
+}
+
+/**
+ * Count unique wall crossings for a single pipe path.
+ * Two intersections within GRID/2 px are merged into one hole,
+ * preventing overlapping collinear room-wall segments from being
+ * counted as multiple holes at the same physical location.
+ */
+function countUniqueCrossings(pipe, walls) {
+  const pts = [];
+  _addPipeCrossings(pipe, walls, pts);
   return pts.length;
 }
 
@@ -402,21 +411,23 @@ function countUniqueCrossings(pipe, walls) {
  */
 function countUnifiedCrossings(pipes, walls) {
   const pts = [];
-  for (const pipe of pipes) {
-    if (!pipe || pipe.length < 2) continue;
-    for (let j = 1; j < pipe.length; j++) {
-      const { x: ax1, y: ay1 } = pipe[j - 1];
-      const { x: ax2, y: ay2 } = pipe[j];
-      for (const w of walls) {
-        if (segsIntersect(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2)) {
-          const pt = segIntersectionPoint(ax1, ay1, ax2, ay2, w.x1, w.y1, w.x2, w.y2);
-          if (!pts.some(p => dist(p.x, p.y, pt.x, pt.y) < GRID / 2))
-            pts.push(pt);
-        }
-      }
-    }
-  }
+  for (const pipe of pipes) _addPipeCrossings(pipe, walls, pts);
   return pts.length;
+}
+
+/**
+ * Collect all unique wall-drilling points from every active pipe
+ * (refrigerant traces T1-T3, power line, condensate line).
+ * Points closer than GRID/2 px to an existing entry are merged into one.
+ * Returns [{x, y}, ...].
+ */
+function collectDrillingPoints() {
+  const walls = allWalls();
+  const pts = [];
+  for (let i = 0; i < app.splitType; i++) _addPipeCrossings(app.pipes[i], walls, pts);
+  _addPipeCrossings(app.powerPipe,      walls, pts);
+  _addPipeCrossings(app.condensatePipe, walls, pts);
+  return pts;
 }
 
 /** Closest point on segment (x1,y1)-(x2,y2) to point (px,py). Returns {x,y,d}. */
@@ -660,6 +671,7 @@ function render() {
   drawManualWalls();
   drawPipe();
   drawPowerCondensaPipes();
+  drawDrillingPoints();
   drawAcUnits();
   drawSpecialUnits();
   drawInProgress();
@@ -848,6 +860,61 @@ function roundRect(ctx, x, y, w, h, r) {
     ctx.quadraticCurveTo(x, y,         x + r, y);
     ctx.closePath();
   }
+}
+
+/* ── Drilling-point markers (red circles on walls) ── */
+function drawDrillingPoints() {
+  const ctx = app.ctx;
+  const pts = collectDrillingPoints();
+  if (pts.length === 0) return;
+
+  const R      = 8;    // outer circle radius (px)
+  const R_FILL = 6;    // inner fill radius (px)
+
+  pts.forEach((pt, idx) => {
+    // Outer white halo (improves visibility on dark walls)
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, R + 2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fill();
+
+    // Red fill
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, R_FILL, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(220,30,30,0.25)';
+    ctx.fill();
+
+    // Red stroke circle
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, R, 0, Math.PI * 2);
+    ctx.strokeStyle = '#CC0000';
+    ctx.lineWidth   = 1.8;
+    ctx.stroke();
+
+    // Cross-hair lines inside circle
+    ctx.strokeStyle = '#CC0000';
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pt.x - R + 3, pt.y);
+    ctx.lineTo(pt.x + R - 3, pt.y);
+    ctx.moveTo(pt.x, pt.y - R + 3);
+    ctx.lineTo(pt.x, pt.y + R - 3);
+    ctx.stroke();
+
+    // Hole number badge (1-indexed)
+    const label = String(idx + 1);
+    ctx.font         = 'bold 10px Segoe UI, sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(label).width;
+    const bx = pt.x + R + 1;
+    const by = pt.y - R - 1;
+    ctx.fillStyle = '#CC0000';
+    roundRect(ctx, bx - tw / 2 - 2, by - 5, tw + 4, 10, 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, bx, by);
+  });
 }
 
 /* ── Completed pipes (all active splits) ── */
