@@ -12,7 +12,7 @@
     <!-- ── Header ─────────────────────────────────────────────── -->
     <header id="app-header">
       <div class="header-left">
-        <span class="header-logo">🏠</span>
+        <img src="logo.svg" alt="Trony Manerbio" class="header-logo-img">
         <h1>Preventivatore Installazione Climatizzatore</h1>
       </div>
       <div class="header-right">
@@ -139,6 +139,16 @@
             <button id="print-btn" class="act-btn print">
               🖨 Stampa A4
             </button>
+            <button id="save-project-btn" class="act-btn save">
+              💾 Salva progetto
+            </button>
+          </div>
+        </section>
+
+        <section class="sb-section" id="saved-projects-section">
+          <h3>📂 Progetti salvati</h3>
+          <div id="saved-projects-list">
+            <!-- populated dynamically -->
           </div>
         </section>
 
@@ -185,6 +195,13 @@
             <label class="mat-item">
               <input type="checkbox" id="mat-predisposizione"> Predisposizione
             </label>
+          </div>
+        </section>
+
+        <section class="sb-section" id="notes-section">
+          <h3>📝 Note stampa</h3>
+          <div id="notes-inputs">
+            <!-- populated dynamically like heights-inputs -->
           </div>
         </section>
 
