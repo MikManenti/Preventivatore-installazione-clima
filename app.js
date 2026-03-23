@@ -17,6 +17,7 @@ const LABEL_HIT_MARGIN   = 4;   // extra margin beyond UNIT_W/2 for speech-bubbl
 const DIST_LABEL_OFFSET  = 14;  // perpendicular offset (px) for per-segment distance labels
 const DEFAULT_LABEL_OX   = 0;   // default horizontal offset of speech-bubble label from anchor (px)
 const DEFAULT_LABEL_OY   = -50; // default vertical offset of speech-bubble label from anchor (px)
+const MIN_CALIB_PX       = 5;   // minimum world-pixel length for a valid calibration line
 
 // Colours for up to 3 independent traces / indoor units
 const PIPE_COLORS    = ['#E91E63', '#FF9800', '#9C27B0']; // magenta · orange · purple
@@ -153,6 +154,17 @@ const app = {
 
   // Undo history  (array of JSON snapshots)
   history: [],
+
+  // Background image (floor plan overlay)
+  bgImage:        null,   // Image object (not serialised – loaded from file)
+  bgImageX:       0,      // World X of image top-left corner
+  bgImageY:       0,      // World Y of image top-left corner
+  bgImageScale:   1.0,    // World pixels per source image pixel
+  bgImageOpacity: 0.4,    // 0..1
+  bgImageVisible: true,   // show / hide toggle
+
+  // Calibration tool state
+  calibPt1: null,         // { x, y } first calibration point (world coords)
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -237,6 +249,18 @@ function init() {
   // Save project button
   document.getElementById('save-project-btn').addEventListener('click', saveProject);
 
+  // Background image controls
+  document.getElementById('bg-image-input').addEventListener('change', onBgImageUpload);
+  document.getElementById('bg-upload-btn').addEventListener('click', () =>
+    document.getElementById('bg-image-input').click()
+  );
+  document.getElementById('bg-opacity-slider').addEventListener('input', e => {
+    app.bgImageOpacity = parseInt(e.target.value, 10) / 100;
+    render();
+  });
+  document.getElementById('bg-toggle-btn').addEventListener('click', toggleBgImage);
+  document.getElementById('bg-remove-btn').addEventListener('click', removeBgImage);
+
   updateHeightUI();
 
   // Preload logo for print
@@ -261,6 +285,73 @@ function preloadLogo() {
     } catch (e) { console.warn('Logo preload failed:', e); }
   };
   img.src = 'logo.svg';
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Background image (floor plan overlay)
+// ════════════════════════════════════════════════════════════════
+function onBgImageUpload(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    alert('Seleziona un file immagine (JPEG, PNG, ecc.).');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    const img = new Image();
+    img.onload = function() {
+      app.bgImage       = img;
+      app.bgImageX      = 0;
+      app.bgImageY      = 0;
+      // Scale so the image width fills the canvas width in world-space at zoom 1:1
+      app.bgImageScale  = app.canvas.width / img.naturalWidth;
+      app.bgImageVisible = true;
+      // Sync UI
+      _syncBgImageUI();
+      selectTool('calibrate');
+      setStatus('Planimetria caricata. Usa lo strumento Calibra per allinearla alla griglia.');
+      render();
+    };
+    img.onerror = function() {
+      alert('Errore nel caricamento dell\'immagine.');
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+  // Reset input so the same file can be re-uploaded
+  e.target.value = '';
+}
+
+function toggleBgImage() {
+  if (!app.bgImage) return;
+  app.bgImageVisible = !app.bgImageVisible;
+  document.getElementById('bg-toggle-btn').textContent =
+    app.bgImageVisible ? '👁 Nascondi' : '👁 Mostra';
+  render();
+}
+
+function removeBgImage() {
+  if (!app.bgImage) return;
+  if (!confirm('Rimuovere la planimetria di sfondo?')) return;
+  app.bgImage    = null;
+  app.calibPt1   = null;
+  _syncBgImageUI();
+  if (app.tool === 'calibrate') selectTool('select');
+  render();
+  setStatus('Planimetria rimossa.');
+}
+
+/** Enable/disable background image controls based on whether an image is loaded. */
+function _syncBgImageUI() {
+  const hasImg = !!app.bgImage;
+  document.getElementById('bg-toggle-btn').disabled  = !hasImg;
+  document.getElementById('bg-remove-btn').disabled  = !hasImg;
+  document.getElementById('calib-tool-btn').disabled = !hasImg;
+  if (hasImg) {
+    document.getElementById('bg-toggle-btn').textContent =
+      app.bgImageVisible ? '👁 Nascondi' : '👁 Mostra';
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -723,6 +814,7 @@ function render() {
 
   // Layer 3 – background: floor plan, walls, AC units, stairs
   drawGrid();
+  drawBackground();
   drawRooms();
   drawRoomWallLabels();
   drawManualWalls();
@@ -770,6 +862,21 @@ function drawGrid() {
     ctx.strokeStyle = idx % 5 === 0 ? '#d0d0d0' : '#ebebeb';
     ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
   }
+}
+
+/* ── Background image (floor plan) ── */
+function drawBackground() {
+  if (!app.bgImage || !app.bgImageVisible) return;
+  const ctx = app.ctx;
+  ctx.save();
+  ctx.globalAlpha = app.bgImageOpacity;
+  ctx.drawImage(
+    app.bgImage,
+    app.bgImageX, app.bgImageY,
+    app.bgImage.naturalWidth  * app.bgImageScale,
+    app.bgImage.naturalHeight * app.bgImageScale
+  );
+  ctx.restore();
 }
 
 /* ── Rooms ── */
@@ -1438,6 +1545,56 @@ function drawInProgress() {
       ctx.restore();
     }
   }
+
+  // Calibration tool preview
+  if (app.tool === 'calibrate') {
+    if (app.calibPt1) {
+      const mx = app.mouse.x, my = app.mouse.y;
+      const dx = mx - app.calibPt1.x, dy = my - app.calibPt1.y;
+      const distPx = Math.sqrt(dx * dx + dy * dy);
+      const distM  = (distPx / GRID) * app.metersPerCell;
+
+      // Calibration line
+      ctx.strokeStyle = '#FF5722';
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.lineCap     = 'round';
+      ctx.beginPath();
+      ctx.moveTo(app.calibPt1.x, app.calibPt1.y);
+      ctx.lineTo(mx, my);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Endpoint markers
+      ctx.strokeStyle = '#FF5722';
+      ctx.fillStyle   = 'rgba(255,87,34,.25)';
+      ctx.lineWidth   = 2;
+      ctx.beginPath(); ctx.arc(app.calibPt1.x, app.calibPt1.y, 6, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(mx, my, 6, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // Distance label at midpoint
+      if (distPx > 10) {
+        const lx = (app.calibPt1.x + mx) / 2;
+        const ly = (app.calibPt1.y + my) / 2;
+        ctx.save();
+        ctx.font         = 'bold 11px Segoe UI, sans-serif';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillStyle    = '#BF360C';
+        ctx.fillText(`${distM.toFixed(2)} m`, lx, ly - 4);
+        ctx.restore();
+      }
+    } else {
+      // Show cursor dot waiting for first point
+      ctx.strokeStyle = '#FF5722';
+      ctx.fillStyle   = 'rgba(255,87,34,.25)';
+      ctx.lineWidth   = 2;
+      ctx.beginPath(); ctx.arc(app.mouse.x, app.mouse.y, 6, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    }
+  }
 }
 
 function snapDot(ctx, x, y) {
@@ -1677,6 +1834,54 @@ function onMouseDown(e) {
         app._lastPipeClick = { time: now, x: snappedPt.x, y: snappedPt.y };
         app.condensatePipeWIP.push({ ...snappedPt });
         syncCompletePipeBtn();
+        render();
+      }
+      break;
+    }
+
+    case 'calibrate': {
+      if (!app.bgImage) {
+        setStatus('⚠ Carica prima una planimetria dal pannello "Planimetria".');
+        break;
+      }
+      if (!app.calibPt1) {
+        // First point: use exact (unsnapped) mouse position for precision
+        app.calibPt1 = { x: raw.x, y: raw.y };
+        setStatus('Calibrazione: clicca il secondo punto della misura nota.');
+        updateHint();
+        render();
+      } else {
+        const pt2 = { x: raw.x, y: raw.y };
+        const dx  = pt2.x - app.calibPt1.x;
+        const dy  = pt2.y - app.calibPt1.y;
+        const linePx = Math.sqrt(dx * dx + dy * dy);
+        if (linePx < MIN_CALIB_PX) {
+          setStatus('⚠ I due punti sono troppo vicini. Clicca il primo punto e riprova.');
+          app.calibPt1 = null;
+          render();
+          break;
+        }
+        const input = prompt(
+          'Inserisci la distanza reale in metri tra i due punti selezionati:\n' +
+          '(es. 3.5 per 3 metri e 50 cm)'
+        );
+        if (input === null) { app.calibPt1 = null; render(); break; } // cancelled
+        const realMeters = parseFloat(input.replace(',', '.'));
+        if (!isFinite(realMeters) || realMeters <= 0) {
+          alert('Distanza non valida. Inserisci un numero positivo in metri (es. 3.5).');
+          app.calibPt1 = null;
+          render();
+          break;
+        }
+        // Scale so that linePx maps to (realMeters / metersPerCell) * GRID world pixels
+        const expectedPx  = (realMeters / app.metersPerCell) * GRID;
+        const scaleFactor = expectedPx / linePx;
+        // Keep calibPt1 fixed in world space while scaling the image
+        app.bgImageX     = app.calibPt1.x - (app.calibPt1.x - app.bgImageX) * scaleFactor;
+        app.bgImageY     = app.calibPt1.y - (app.calibPt1.y - app.bgImageY) * scaleFactor;
+        app.bgImageScale *= scaleFactor;
+        app.calibPt1     = null;
+        setStatus(`✅ Planimetria calibrata: ${realMeters} m. Ora ricalca le stanze sopra l'immagine.`);
         render();
       }
       break;
@@ -2046,10 +2251,12 @@ function onKeyDown(e) {
   if (e.key === 'Escape') {
     app.drawStart = null;
     app.wallStart = null;
+    app.calibPt1  = null;
     app.pipeWIP   = [];
     app.powerPipeWIP = [];
     app.condensatePipeWIP = [];
     syncCompletePipeBtn();
+    updateHint();
     render();
     setStatus('Operazione annullata.');
   }
@@ -2347,6 +2554,7 @@ function selectTool(tool) {
   if (tool !== app.tool) {
     app.drawStart = null;
     app.wallStart = null;
+    app.calibPt1  = null;
     if (tool !== 'drawPipe') {
       // Don't discard WIP pipe when user temporarily switches away
     }
@@ -2374,6 +2582,9 @@ function updateHint() {
     placeDrain:      'Clic vicino a una parete per posizionare lo scarico condensa (💧)',
     drawPowerPipe:   'Clicca i punti del percorso elettrico — doppio-clic per completare',
     drawCondensaPipe:'Clicca i punti del percorso condensa — doppio-clic per completare',
+    calibrate:       app.calibPt1
+      ? 'Calibrazione: clicca il 2° punto, poi inserisci la distanza reale in metri'
+      : 'Calibrazione: clicca il 1° punto sulla planimetria',
   };
   document.getElementById('tool-hint').textContent = hints[app.tool] || '';
 }
@@ -2972,6 +3183,7 @@ function renderPrintCanvas() {
 
   // Draw all permanent layers (same order as render(), minus in-progress / handles)
   drawGrid();
+  drawBackground();
   drawRooms();
   drawRoomWallLabels();
   drawManualWalls();

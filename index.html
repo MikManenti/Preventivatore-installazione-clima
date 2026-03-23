@@ -77,6 +77,30 @@
                     title="Disegna traccia condensa">
               <span class="ti">💦</span><span class="tl">T. Cond.</span>
             </button>
+            <button class="tool-btn" data-tool="calibrate" id="calib-tool-btn"
+                    title="Calibra planimetria di sfondo: clic su 2 punti → inserisci la misura reale" disabled>
+              <span class="ti">📐</span><span class="tl">Calibra</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="sb-section">
+          <h3>Planimetria</h3>
+          <input type="file" id="bg-image-input" accept="image/*" style="display:none" />
+          <div class="action-btns">
+            <button class="act-btn" id="bg-upload-btn" title="Carica un file JPEG/PNG come sfondo da tracciare">
+              📷 Carica immagine
+            </button>
+            <label class="bg-opacity-label" title="Trasparenza della planimetria di sfondo">
+              Opacità
+              <input type="range" id="bg-opacity-slider" min="10" max="100" value="40" />
+            </label>
+            <button class="act-btn" id="bg-toggle-btn" disabled>
+              👁 Nascondi
+            </button>
+            <button class="act-btn danger" id="bg-remove-btn" disabled>
+              🗑 Rimuovi
+            </button>
           </div>
         </section>
 
