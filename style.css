@@ -153,6 +153,25 @@ html, body {
 .scale-row small { color: #5f6368; font-size: 10px; }
 
 /* ────────────────────────────────────────────────────────────────
+   Background image (planimetria) controls
+──────────────────────────────────────────────────────────────── */
+.bg-opacity-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #5f6368;
+  margin-top: 6px;
+  margin-bottom: 2px;
+}
+.bg-opacity-label input[type="range"] {
+  flex: 1;
+  height: 4px;
+  accent-color: #1565C0;
+  cursor: pointer;
+}
+
+/* ────────────────────────────────────────────────────────────────
    Action buttons
 ──────────────────────────────────────────────────────────────── */
 .action-btns { display: flex; flex-direction: column; gap: 5px; }
