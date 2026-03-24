@@ -274,17 +274,14 @@ function init() {
 //  Logo preload (for embedding in print)
 // ════════════════════════════════════════════════════════════════
 function preloadLogo() {
-  const img = new Image();
-  img.onload = function() {
-    try {
-      const c = document.createElement('canvas');
-      c.width  = img.naturalWidth;
-      c.height = img.naturalHeight;
-      c.getContext('2d').drawImage(img, 0, 0);
-      LOGO_DATA_URL = c.toDataURL('image/png');
-    } catch (e) { console.warn('Logo preload failed:', e); }
-  };
-  img.src = 'logo.svg';
+  // Fetch the SVG text and embed it as a data-URL so the original
+  // aspect ratio is always preserved (no canvas rasterisation).
+  fetch('logo.svg')
+    .then(r => r.text())
+    .then(svg => {
+      LOGO_DATA_URL = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    })
+    .catch(e => { console.warn('Logo preload failed:', e); });
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -3381,7 +3378,7 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
 </head>
 <body>
   <div class="print-header">
-    <div class="app-name">${LOGO_DATA_URL ? `<img src="${LOGO_DATA_URL}" alt="Logo" style="height:56px;width:auto;display:block;margin-bottom:2px" />` : ''}Preventivatore Installazione Climatizzatore</div>
+    <div class="app-name">${LOGO_DATA_URL ? `<img src="${LOGO_DATA_URL}" alt="Logo" style="height:56px;width:auto;display:block;margin-bottom:2px" />` : ''}</div>
     <div class="meta">
       <div class="customer">Cliente: ${safeCustomer}</div>
       <div>Data: ${safeDate}</div>
