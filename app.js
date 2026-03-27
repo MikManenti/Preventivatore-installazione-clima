@@ -257,7 +257,10 @@ function init() {
   );
 
   // ── Header buttons ────────────────────────────────────────────
-  document.getElementById('settings-btn').addEventListener('click', () => openModal('modal-settings'));
+  document.getElementById('settings-btn').addEventListener('click', () => {
+    renderListiniModal();
+    openModal('modal-settings');
+  });
   document.getElementById('back-to-home-btn').addEventListener('click', showHomepage);
 
   // ── Homepage buttons ──────────────────────────────────────────
@@ -3788,6 +3791,196 @@ function renderProjectsList() {
   renderHomepageProjects(
     (document.getElementById('hp-search-input') || {}).value || ''
   );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Gestione Listini  (price-list management)
+// ════════════════════════════════════════════════════════════════
+const LISTINI_KEY = 'climaListini';
+
+/** Fixed row definitions – do NOT change keys once in production (they are used as storage keys). */
+const LISTINI_ROWS = [
+  { key: 'mono_pred',    label: 'Installazione mono – predisposizione/sostituzione' },
+  { key: 'mono_new',     label: 'Installazione mono – nuovo impianto parete/parete' },
+  { key: 'dual_pred',    label: 'Installazione dual – predisposizione/sostituzione' },
+  { key: 'dual_new',     label: 'Installazione dual – nuovo impianto 3m linea' },
+  { key: 'trial_pred',   label: 'Installazione trial – predisposizione/sostituzione' },
+  { key: 'trial_new',    label: 'Installazione trial – nuovo impianto 3m linea' },
+  { key: 'staffa_mono',  label: 'Staffa mono' },
+  { key: 'staffa_multi', label: 'Staffa multi' },
+  { key: 'linea_mt',     label: 'Costo linea al metro (oltre 3 m)' },
+  { key: 'condensa_mt',  label: 'Costo linea condensa al metro (oltre 2 m)' },
+  { key: 'corrente_mt',  label: 'Costo linea corrente al metro (oltre 2 m)' },
+  { key: 'ponteggio',    label: 'Ponteggio' },
+];
+
+const LISTINI_MAX_COLS = 4;
+
+function getStoredListini() {
+  try {
+    const raw = localStorage.getItem(LISTINI_KEY);
+    if (!raw) return { installers: [], prices: {} };
+    return JSON.parse(raw);
+  } catch (e) {
+    return { installers: [], prices: {} };
+  }
+}
+
+function _saveStoredListini(data) {
+  localStorage.setItem(LISTINI_KEY, JSON.stringify(data));
+}
+
+/**
+ * (Re-)render the price-list table inside #listini-container.
+ * Called each time the settings modal opens, or after any edit.
+ */
+function renderListiniModal() {
+  const container = document.getElementById('listini-container');
+  if (!container) return;
+
+  const data = getStoredListini();
+  const numCols = data.installers.length;
+  const canAdd  = numCols < LISTINI_MAX_COLS;
+
+  // ── Toolbar ────────────────────────────────────────────────────
+  let html = '<div class="listini-toolbar">';
+  html += `<span class="listini-toolbar-info">` +
+    (numCols === 0
+      ? 'Nessun installatore aggiunto ancora. Aggiungi una colonna per inserire i prezzi.'
+      : `${numCols} installatore${numCols > 1 ? 'i' : ''} configurato${numCols > 1 ? 'i' : ''}`) +
+    `</span>`;
+  html += `<button class="listini-add-btn" id="listini-add-btn"${canAdd ? '' : ' disabled'}>` +
+    `＋ Aggiungi installatore</button>`;
+  html += '</div>';
+
+  // ── Empty state (no columns yet) ───────────────────────────────
+  if (numCols === 0) {
+    html += `<div class="listini-empty-state">` +
+      `<strong>Nessun listino presente</strong>` +
+      `Clicca <em>"Aggiungi installatore"</em> per creare la prima colonna di prezzi.` +
+      `</div>`;
+    container.innerHTML = html;
+    _bindListiniEvents(container, data);
+    return;
+  }
+
+  // ── Table ──────────────────────────────────────────────────────
+  html += '<div class="listini-scroll"><table class="listini-table"><thead><tr>';
+  html += '<th class="listini-th-label">Lavorazione</th>';
+
+  data.installers.forEach((name, idx) => {
+    html += `<th class="listini-th-installer">` +
+      `<div class="listini-installer-header">` +
+        `<span class="listini-installer-name" title="${_escHtml(name)}">${_escHtml(name)}</span>` +
+        `<div class="listini-installer-actions">` +
+          `<button class="listini-icon-btn" data-action="rename-col" data-col="${idx}" title="Rinomina">✏</button>` +
+          `<button class="listini-icon-btn danger" data-action="delete-col" data-col="${idx}" title="Elimina colonna">🗑</button>` +
+        `</div>` +
+      `</div>` +
+    `</th>`;
+  });
+
+  html += '</tr></thead><tbody>';
+
+  LISTINI_ROWS.forEach(row => {
+    html += `<tr><td class="listini-td-label">${_escHtml(row.label)}</td>`;
+    data.installers.forEach((_, idx) => {
+      const val = (data.prices[row.key] && data.prices[row.key][idx] !== undefined)
+        ? data.prices[row.key][idx] : '';
+      html += `<td class="listini-td-price">` +
+        `<div class="listini-price-wrap">` +
+          `<span class="listini-price-currency">€</span>` +
+          `<input class="listini-price-input" type="number" min="0" step="0.50"` +
+            ` data-row="${row.key}" data-col="${idx}"` +
+            ` value="${_escHtml(String(val))}" placeholder="—">` +
+        `</div>` +
+      `</td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+  _bindListiniEvents(container, data);
+}
+
+/** Attach all event listeners to the rendered listini markup. */
+function _bindListiniEvents(container, data) {
+  // Add column
+  const addBtn = document.getElementById('listini-add-btn');
+  if (addBtn && !addBtn.disabled) {
+    addBtn.addEventListener('click', () => {
+      const fresh = getStoredListini();
+      if (fresh.installers.length >= LISTINI_MAX_COLS) return;
+      const name = prompt(
+        'Nome del nuovo installatore:',
+        'Installatore ' + (fresh.installers.length + 1)
+      );
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      fresh.installers.push(trimmed);
+      _saveStoredListini(fresh);
+      renderListiniModal();
+    });
+  }
+
+  // Rename column
+  container.querySelectorAll('[data-action="rename-col"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const col   = parseInt(btn.dataset.col, 10);
+      const fresh = getStoredListini();
+      const cur   = fresh.installers[col] || '';
+      const name  = prompt('Nuovo nome installatore:', cur);
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      fresh.installers[col] = trimmed;
+      _saveStoredListini(fresh);
+      renderListiniModal();
+    });
+  });
+
+  // Delete column
+  container.querySelectorAll('[data-action="delete-col"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const col   = parseInt(btn.dataset.col, 10);
+      const fresh = getStoredListini();
+      if (!confirm(`Eliminare la colonna "${fresh.installers[col]}" e tutti i prezzi associati?`)) return;
+      fresh.installers.splice(col, 1);
+      // Remap column indices in prices (shift down)
+      Object.keys(fresh.prices).forEach(rowKey => {
+        const rowPrices = fresh.prices[rowKey];
+        const newRow    = {};
+        Object.keys(rowPrices).forEach(c => {
+          const ci = parseInt(c, 10);
+          if (ci < col)       newRow[ci]     = rowPrices[c];
+          else if (ci > col)  newRow[ci - 1] = rowPrices[c];
+          // ci === col: dropped
+        });
+        fresh.prices[rowKey] = newRow;
+      });
+      _saveStoredListini(fresh);
+      renderListiniModal();
+    });
+  });
+
+  // Price inputs – save on change (blur / Enter)
+  container.querySelectorAll('.listini-price-input').forEach(input => {
+    input.addEventListener('change', e => {
+      const rowKey = e.target.dataset.row;
+      const col    = parseInt(e.target.dataset.col, 10);
+      const val    = e.target.value.trim();
+      const fresh  = getStoredListini();
+      if (!fresh.prices[rowKey]) fresh.prices[rowKey] = {};
+      if (val === '') {
+        delete fresh.prices[rowKey][col];
+      } else {
+        fresh.prices[rowKey][col] = val;
+      }
+      _saveStoredListini(fresh);
+    });
+  });
 }
 
 // ════════════════════════════════════════════════════════════════

@@ -775,3 +775,221 @@ kbd {
   line-height: 1.5;
   color: #3c4043;
 }
+
+/* ────────────────────────────────────────────────────────────────
+   Modal size variant: extra large (settings / listini)
+──────────────────────────────────────────────────────────────── */
+.modal-box-xl {
+  max-width: 920px;
+  width: 95%;
+  max-height: 90vh;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Modal tabs
+──────────────────────────────────────────────────────────────── */
+.modal-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #dadce0;
+  background: #f8f9fa;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+
+.modal-tab {
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #5f6368;
+  padding: 10px 16px;
+  margin-bottom: -2px;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.modal-tab:hover { color: #1565C0; }
+.modal-tab.active {
+  color: #1565C0;
+  border-bottom-color: #1565C0;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Gestione Listini – table
+──────────────────────────────────────────────────────────────── */
+.listini-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 12px;
+}
+.listini-toolbar-info {
+  font-size: 12px;
+  color: #80868b;
+}
+.listini-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1565C0;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+.listini-add-btn:hover { background: #1976D2; }
+.listini-add-btn:disabled {
+  background: #c5cae9;
+  cursor: not-allowed;
+}
+
+.listini-scroll {
+  overflow-x: auto;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+}
+
+.listini-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 480px;
+}
+
+.listini-table thead {
+  background: #f1f3f4;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.listini-th-label,
+.listini-th-installer {
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5f6368;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  border-bottom: 2px solid #dadce0;
+  white-space: nowrap;
+}
+
+.listini-th-label {
+  width: 44%;
+  min-width: 260px;
+  background: #f1f3f4;
+}
+
+.listini-th-installer {
+  width: 14%;
+  min-width: 130px;
+  background: #f1f3f4;
+  border-left: 1px solid #dadce0;
+}
+
+.listini-installer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.listini-installer-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #202124;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 80px;
+  flex: 1;
+}
+
+.listini-installer-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.listini-icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: #5f6368;
+  transition: background .12s, color .12s;
+  line-height: 1;
+}
+.listini-icon-btn:hover { background: #e8f0fe; color: #1565C0; }
+.listini-icon-btn.danger:hover { background: #fce8e6; color: #d93025; }
+
+.listini-table tbody tr {
+  border-bottom: 1px solid #f0f2f5;
+  transition: background .1s;
+}
+.listini-table tbody tr:last-child { border-bottom: none; }
+.listini-table tbody tr:hover { background: #f8f9fa; }
+
+.listini-td-label {
+  padding: 9px 12px;
+  font-size: 13px;
+  color: #3c4043;
+  line-height: 1.4;
+}
+
+.listini-td-price {
+  padding: 6px 8px;
+  border-left: 1px solid #f0f2f5;
+  text-align: center;
+}
+
+.listini-price-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  justify-content: center;
+}
+.listini-price-currency {
+  font-size: 12px;
+  color: #80868b;
+  flex-shrink: 0;
+}
+
+.listini-price-input {
+  width: 80px;
+  padding: 5px 6px;
+  font-size: 13px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  text-align: right;
+  color: #202124;
+  transition: border-color .15s, box-shadow .15s;
+}
+.listini-price-input:focus {
+  outline: none;
+  border-color: #1565C0;
+  box-shadow: 0 0 0 2px rgba(21,101,192,.15);
+}
+.listini-price-input::-webkit-inner-spin-button,
+.listini-price-input::-webkit-outer-spin-button { opacity: 1; }
+
+.listini-empty-state {
+  text-align: center;
+  padding: 32px 20px;
+  color: #80868b;
+  font-size: 13px;
+  border: 2px dashed #dadce0;
+  border-radius: 8px;
+}
+.listini-empty-state strong { display: block; font-size: 15px; color: #5f6368; margin-bottom: 6px; }
