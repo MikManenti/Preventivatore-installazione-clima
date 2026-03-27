@@ -198,15 +198,11 @@ function init() {
     btn.addEventListener('click', () => loadTemplate(btn.dataset.template))
   );
 
-  // Action buttons
+  // Action buttons (complete & undo remain in the sidebar)
   document.getElementById('complete-pipe-btn')
     .addEventListener('click', completePipe);
   document.getElementById('undo-btn')
     .addEventListener('click', undo);
-  document.getElementById('clear-pipe-btn')
-    .addEventListener('click', clearPipe);
-  document.getElementById('clear-all-btn')
-    .addEventListener('click', clearAll);
 
   // Split-configuration buttons
   document.querySelectorAll('.split-btn').forEach(btn =>
@@ -220,11 +216,6 @@ function init() {
       updateResults();
       render();
     });
-
-  // Load default template
-  loadTemplate('bilocale');
-  updateSplitUI();
-  updateHint();
 
   // Zoom controls
   document.getElementById('zoom-reset-btn').addEventListener('click', () => {
@@ -243,17 +234,8 @@ function init() {
     if (el) el.addEventListener('change', e => { app.materials[key] = e.target.checked; });
   });
 
-  // Print button
-  document.getElementById('print-btn').addEventListener('click', printReport);
-
-  // Save project button
-  document.getElementById('save-project-btn').addEventListener('click', saveProject);
-
   // Background image controls
   document.getElementById('bg-image-input').addEventListener('change', onBgImageUpload);
-  document.getElementById('bg-upload-btn').addEventListener('click', () =>
-    document.getElementById('bg-image-input').click()
-  );
   document.getElementById('bg-opacity-slider').addEventListener('input', e => {
     app.bgImageOpacity = parseInt(e.target.value, 10) / 100;
     render();
@@ -261,13 +243,186 @@ function init() {
   document.getElementById('bg-toggle-btn').addEventListener('click', toggleBgImage);
   document.getElementById('bg-remove-btn').addEventListener('click', removeBgImage);
 
+  // ── Dropdown menus (Progetto / Help) ──────────────────────────
+  _initDropdowns();
+
+  // ── Modals ────────────────────────────────────────────────────
+  document.querySelectorAll('.modal-close').forEach(btn =>
+    btn.addEventListener('click', () => closeModal(btn.dataset.modal))
+  );
+  document.querySelectorAll('.modal-overlay').forEach(overlay =>
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) closeModal(overlay.id);
+    })
+  );
+
+  // ── Header buttons ────────────────────────────────────────────
+  document.getElementById('settings-btn').addEventListener('click', () => openModal('modal-settings'));
+  document.getElementById('back-to-home-btn').addEventListener('click', showHomepage);
+
+  // ── Homepage buttons ──────────────────────────────────────────
+  document.getElementById('new-project-btn').addEventListener('click', startNewProject);
+  document.getElementById('hp-search-input').addEventListener('input', e =>
+    renderHomepageProjects(e.target.value.trim())
+  );
+
   updateHeightUI();
 
   // Preload logo for print
   preloadLogo();
 
-  // Populate saved-projects list
-  renderProjectsList();
+  // Start on homepage
+  showHomepage();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Screen switching
+// ════════════════════════════════════════════════════════════════
+function showHomepage() {
+  document.getElementById('homepage').style.display      = 'flex';
+  document.getElementById('design-screen').style.display = 'none';
+  document.getElementById('design-menubar').style.display = 'none';
+  document.getElementById('back-to-home-btn').style.display = 'none';
+  renderHomepageProjects('');
+}
+
+function showDesignScreen() {
+  document.getElementById('homepage').style.display      = 'none';
+  document.getElementById('design-screen').style.display = 'flex';
+  document.getElementById('design-menubar').style.display = 'flex';
+  document.getElementById('back-to-home-btn').style.display = '';
+  // Re-size canvas now that the wrapper is visible
+  requestAnimationFrame(() => {
+    resizeCanvas();
+    updateHint();
+    render();
+    updateResults();
+  });
+}
+
+/** Create a blank project and switch to the design screen. */
+function startNewProject() {
+  // Reset state to a clean bilocale template
+  app.rooms         = [];
+  app.manualWalls   = [];
+  app.stairs        = [];
+  app.indoorUnits   = [null];
+  app.outdoorUnit   = null;
+  app.indoorHeights = [0];
+  app.outdoorHeight = 0;
+  app.pipes         = [[]];
+  app.pipeWIP           = [];
+  app.powerOutlet       = null;
+  app.outletHeight      = 0;
+  app.condensateDrain   = null;
+  app.powerPipe         = [];
+  app.condensatePipe    = [];
+  app.powerPipeWIP      = [];
+  app.condensatePipeWIP = [];
+  app.history           = [];
+  app.drawStart     = null;
+  app.wallStart     = null;
+  app.splitType     = 1;
+  app.activePipeIdx = 0;
+  app.bgImage       = null;
+  app.calibPt1      = null;
+  app.metersPerCell = 0.5;
+  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+  MATERIALS_KEYS.forEach(key => {
+    const el = document.getElementById('mat-' + key);
+    if (el) el.checked = false;
+  });
+  app.indoorNotes = ['', '', ''];
+  app.outdoorNote = '';
+  app.holesNote   = '';
+  app.generalNote = '';
+
+  const scaleInput = document.getElementById('scale-input');
+  if (scaleInput) scaleInput.value = 0.5;
+
+  _syncBgImageUI();
+  loadTemplate('bilocale');
+  updateSplitUI();
+  updateHeightUI();
+  showDesignScreen();
+  setStatus('Nuovo progetto creato.');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Dropdown menu setup
+// ════════════════════════════════════════════════════════════════
+function _initDropdowns() {
+  // Toggle open/close on button click; close others
+  document.querySelectorAll('.menu-btn').forEach(btn => {
+    const item = btn.closest('.menu-item');
+    const drop = item.querySelector('.menu-dropdown');
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const isOpen = drop.classList.contains('open');
+      _closeAllDropdowns();
+      if (!isOpen) {
+        drop.classList.add('open');
+        btn.classList.add('open');
+      }
+    });
+  });
+
+  // Close when clicking outside
+  document.addEventListener('click', _closeAllDropdowns);
+
+  // Prevent dropdown clicks from closing it immediately
+  document.querySelectorAll('.menu-dropdown').forEach(drop =>
+    drop.addEventListener('click', e => e.stopPropagation())
+  );
+
+  // ── Progetto dropdown items ───────────────────────────────────
+  document.getElementById('dd-save').addEventListener('click', () => {
+    _closeAllDropdowns(); saveProject();
+  });
+  document.getElementById('dd-import-bg').addEventListener('click', () => {
+    _closeAllDropdowns(); document.getElementById('bg-image-input').click();
+  });
+  document.getElementById('dd-clear-trace').addEventListener('click', () => {
+    _closeAllDropdowns(); clearActivePipeTrace();
+  });
+  document.getElementById('dd-clear-power').addEventListener('click', () => {
+    _closeAllDropdowns(); clearPowerPipeTrace();
+  });
+  document.getElementById('dd-clear-condensa').addEventListener('click', () => {
+    _closeAllDropdowns(); clearCondensatePipeTrace();
+  });
+  document.getElementById('dd-clear-all').addEventListener('click', () => {
+    _closeAllDropdowns(); clearAll();
+  });
+  document.getElementById('dd-print').addEventListener('click', () => {
+    _closeAllDropdowns(); printReport();
+  });
+
+  // ── Help dropdown items ───────────────────────────────────────
+  document.getElementById('dd-guide').addEventListener('click', () => {
+    _closeAllDropdowns(); openModal('modal-guide');
+  });
+  document.getElementById('dd-legend').addEventListener('click', () => {
+    _closeAllDropdowns(); openModal('modal-legend');
+  });
+}
+
+function _closeAllDropdowns() {
+  document.querySelectorAll('.menu-dropdown.open').forEach(d => d.classList.remove('open'));
+  document.querySelectorAll('.menu-btn.open').forEach(b => b.classList.remove('open'));
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Modal helpers
+// ════════════════════════════════════════════════════════════════
+function openModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'flex';
+}
+
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2673,22 +2828,47 @@ function undo() {
 // ════════════════════════════════════════════════════════════════
 //  Clear actions
 // ════════════════════════════════════════════════════════════════
-function clearPipe() {
+
+/** Clear the active pipe trace (always the current split trace, ignoring tool). */
+function clearActivePipeTrace() {
   saveHistory();
-  if (app.tool === 'drawPowerPipe') {
-    app.powerPipe = []; app.powerPipeWIP = [];
-    setStatus('Traccia corrente cancellata.');
-  } else if (app.tool === 'drawCondensaPipe') {
-    app.condensatePipe = []; app.condensatePipeWIP = [];
-    setStatus('Traccia condensa cancellata.');
-  } else {
-    app.pipes[app.activePipeIdx] = [];
-    app.pipeWIP = [];
-    setStatus(`Traccia ${app.activePipeIdx + 1} cancellata.`);
-  }
+  app.pipes[app.activePipeIdx] = [];
+  app.pipeWIP = [];
+  setStatus(`Traccia ${app.activePipeIdx + 1} cancellata.`);
   syncCompletePipeBtn();
   render();
   updateResults();
+}
+
+/** Clear the power (outlets) pipe trace. */
+function clearPowerPipeTrace() {
+  saveHistory();
+  app.powerPipe = []; app.powerPipeWIP = [];
+  setStatus('Traccia prese cancellata.');
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+}
+
+/** Clear the condensate pipe trace. */
+function clearCondensatePipeTrace() {
+  saveHistory();
+  app.condensatePipe = []; app.condensatePipeWIP = [];
+  setStatus('Traccia condensa cancellata.');
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+}
+
+/** Legacy: clear trace according to active tool (kept for keyboard shortcut / undo). */
+function clearPipe() {
+  if (app.tool === 'drawPowerPipe') {
+    clearPowerPipeTrace();
+  } else if (app.tool === 'drawCondensaPipe') {
+    clearCondensatePipeTrace();
+  } else {
+    clearActivePipeTrace();
+  }
 }
 
 function clearAll() {
@@ -3496,7 +3676,7 @@ function saveProject() {
   const projects = getStoredProjects();
   projects.unshift(project); // newest first
   _saveStoredProjects(projects);
-  renderProjectsList();
+  renderHomepageProjects('');
   setStatus(`Progetto "${projectName}" salvato.`);
 }
 
@@ -3549,13 +3729,26 @@ function loadProject(id) {
     syncCompletePipeBtn();
     updateSplitUI();
     updateHeightUI();
-    render();
-    updateResults();
+    showDesignScreen();
     setStatus(`Progetto "${project.name}" caricato.`);
   } catch (e) {
     console.error('loadProject error:', e);
     setStatus('Errore nel caricamento del progetto.');
   }
+}
+
+function renameProject(id) {
+  const projects = getStoredProjects();
+  const project  = projects.find(p => p.id === id);
+  if (!project) return;
+  const newName = prompt('Rinomina il progetto:', project.name);
+  if (newName === null) return; // cancelled
+  const trimmed = newName.trim();
+  if (!trimmed) return;
+  project.name = trimmed;
+  _saveStoredProjects(projects);
+  renderHomepageProjects(document.getElementById('hp-search-input').value.trim());
+  setStatus(`Progetto rinominato in "${trimmed}".`);
 }
 
 function deleteProject(id) {
@@ -3564,35 +3757,48 @@ function deleteProject(id) {
   if (!project) return;
   if (!confirm(`Eliminare il progetto "${project.name}"?`)) return;
   _saveStoredProjects(projects.filter(p => p.id !== id));
-  renderProjectsList();
+  renderHomepageProjects(document.getElementById('hp-search-input').value.trim());
   setStatus(`Progetto "${project.name}" eliminato.`);
 }
 
-function renderProjectsList() {
-  const container = document.getElementById('saved-projects-list');
+/** Render the projects list on the homepage, optionally filtered by name. */
+function renderHomepageProjects(filter) {
+  const container = document.getElementById('hp-projects-list');
   if (!container) return;
-  const projects = getStoredProjects();
+  const all      = getStoredProjects();
+  const q        = (filter || '').toLowerCase();
+  const projects = q ? all.filter(p => p.name.toLowerCase().includes(q)) : all;
   container.innerHTML = '';
   if (projects.length === 0) {
-    container.innerHTML = '<p class="no-projects">Nessun progetto salvato.</p>';
+    container.innerHTML = `<p class="hp-no-projects">${q ? 'Nessun progetto trovato.' : 'Nessun progetto salvato. Crea un nuovo progetto per iniziare!'}</p>`;
     return;
   }
   for (const p of projects) {
     const item = document.createElement('div');
-    item.className = 'saved-project-item';
+    item.className = 'hp-project-item';
     item.innerHTML =
-      `<div class="proj-info">` +
-        `<span class="proj-name">${_escHtml(p.name)}</span>` +
-        `<span class="proj-date">${_escHtml(new Date(p.savedAt).toLocaleString('it-IT'))}</span>` +
+      `<span class="hp-proj-icon">📁</span>` +
+      `<div class="hp-proj-info">` +
+        `<div class="hp-proj-name">${_escHtml(p.name)}</div>` +
+        `<div class="hp-proj-date">${_escHtml(new Date(p.savedAt).toLocaleString('it-IT'))}</div>` +
       `</div>` +
-      `<div class="proj-actions">` +
-        `<button class="proj-load-btn" title="Carica progetto">📂</button>` +
-        `<button class="proj-delete-btn" title="Elimina progetto">🗑</button>` +
+      `<div class="hp-proj-actions">` +
+        `<button class="hp-proj-btn" title="Apri progetto">📂 Apri</button>` +
+        `<button class="hp-proj-btn rename" title="Rinomina progetto">✏ Rinomina</button>` +
+        `<button class="hp-proj-btn del" title="Elimina progetto">🗑 Elimina</button>` +
       `</div>`;
-    item.querySelector('.proj-load-btn').addEventListener('click', () => loadProject(p.id));
-    item.querySelector('.proj-delete-btn').addEventListener('click', () => deleteProject(p.id));
+    item.querySelectorAll('.hp-proj-btn')[0].addEventListener('click', () => loadProject(p.id));
+    item.querySelectorAll('.hp-proj-btn')[1].addEventListener('click', () => renameProject(p.id));
+    item.querySelectorAll('.hp-proj-btn')[2].addEventListener('click', () => deleteProject(p.id));
     container.appendChild(item);
   }
+}
+
+/** Legacy – kept so any internal calls still work. */
+function renderProjectsList() {
+  renderHomepageProjects(
+    (document.getElementById('hp-search-input') || {}).value || ''
+  );
 }
 
 // ════════════════════════════════════════════════════════════════
