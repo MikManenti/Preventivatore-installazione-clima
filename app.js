@@ -31,7 +31,7 @@ const CONDENSA_COLOR = '#00BCD4';
 const CONDENSA_DARK  = '#006064';
 
 // Keys for the materials/works checklist (used in init, undo, clearAll)
-const MATERIALS_KEYS = ['staffaUE', 'lavaggioImpianto', 'predisposizione'];
+const MATERIALS_KEYS = ['staffaUE', 'lavaggioImpianto', 'predisposizione', 'ponteggio'];
 
 // Logo data-URL (preloaded at startup for embedding in print)
 let LOGO_DATA_URL = null;
@@ -144,7 +144,7 @@ const app = {
   zoom: 1, panX: 0, panY: 0, _panStart: null, _panStartMouse: null,
 
   // Materials / works checklist
-  materials: { staffaUE: false, lavaggioImpianto: false, predisposizione: false },
+  materials: { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false },
 
   // Print notes (not drawn on canvas)
   indoorNotes: ['', '', ''],  // one note per indoor-unit slot (indices 0-2)
@@ -198,15 +198,11 @@ function init() {
     btn.addEventListener('click', () => loadTemplate(btn.dataset.template))
   );
 
-  // Action buttons
+  // Action buttons (complete & undo remain in the sidebar)
   document.getElementById('complete-pipe-btn')
     .addEventListener('click', completePipe);
   document.getElementById('undo-btn')
     .addEventListener('click', undo);
-  document.getElementById('clear-pipe-btn')
-    .addEventListener('click', clearPipe);
-  document.getElementById('clear-all-btn')
-    .addEventListener('click', clearAll);
 
   // Split-configuration buttons
   document.querySelectorAll('.split-btn').forEach(btn =>
@@ -220,11 +216,6 @@ function init() {
       updateResults();
       render();
     });
-
-  // Load default template
-  loadTemplate('bilocale');
-  updateSplitUI();
-  updateHint();
 
   // Zoom controls
   document.getElementById('zoom-reset-btn').addEventListener('click', () => {
@@ -243,17 +234,8 @@ function init() {
     if (el) el.addEventListener('change', e => { app.materials[key] = e.target.checked; });
   });
 
-  // Print button
-  document.getElementById('print-btn').addEventListener('click', printReport);
-
-  // Save project button
-  document.getElementById('save-project-btn').addEventListener('click', saveProject);
-
   // Background image controls
   document.getElementById('bg-image-input').addEventListener('change', onBgImageUpload);
-  document.getElementById('bg-upload-btn').addEventListener('click', () =>
-    document.getElementById('bg-image-input').click()
-  );
   document.getElementById('bg-opacity-slider').addEventListener('input', e => {
     app.bgImageOpacity = parseInt(e.target.value, 10) / 100;
     render();
@@ -261,13 +243,192 @@ function init() {
   document.getElementById('bg-toggle-btn').addEventListener('click', toggleBgImage);
   document.getElementById('bg-remove-btn').addEventListener('click', removeBgImage);
 
+  // ── Dropdown menus (Progetto / Help) ──────────────────────────
+  _initDropdowns();
+
+  // ── Modals ────────────────────────────────────────────────────
+  document.querySelectorAll('.modal-close').forEach(btn =>
+    btn.addEventListener('click', () => closeModal(btn.dataset.modal))
+  );
+  document.querySelectorAll('.modal-overlay').forEach(overlay =>
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) closeModal(overlay.id);
+    })
+  );
+
+  // ── Header buttons ────────────────────────────────────────────
+  document.getElementById('settings-btn').addEventListener('click', () => {
+    renderListiniModal();
+    openModal('modal-settings');
+  });
+  document.getElementById('back-to-home-btn').addEventListener('click', showHomepage);
+
+  // ── Homepage buttons ──────────────────────────────────────────
+  document.getElementById('new-project-btn').addEventListener('click', startNewProject);
+  document.getElementById('hp-search-input').addEventListener('input', e =>
+    renderHomepageProjects(e.target.value.trim())
+  );
+
   updateHeightUI();
 
   // Preload logo for print
   preloadLogo();
 
-  // Populate saved-projects list
-  renderProjectsList();
+  // Start on homepage
+  showHomepage();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Screen switching
+// ════════════════════════════════════════════════════════════════
+function showHomepage() {
+  document.getElementById('homepage').style.display      = 'flex';
+  document.getElementById('design-screen').style.display = 'none';
+  document.getElementById('design-menubar').style.display = 'none';
+  document.getElementById('back-to-home-btn').style.display = 'none';
+  renderHomepageProjects('');
+}
+
+function showDesignScreen() {
+  document.getElementById('homepage').style.display      = 'none';
+  document.getElementById('design-screen').style.display = 'flex';
+  document.getElementById('design-menubar').style.display = 'flex';
+  document.getElementById('back-to-home-btn').style.display = '';
+  // Re-size canvas now that the wrapper is visible
+  requestAnimationFrame(() => {
+    resizeCanvas();
+    updateHint();
+    render();
+    updateResults();
+  });
+}
+
+/** Create a blank project and switch to the design screen. */
+function startNewProject() {
+  // Reset state to a clean bilocale template
+  app.rooms         = [];
+  app.manualWalls   = [];
+  app.stairs        = [];
+  app.indoorUnits   = [null];
+  app.outdoorUnit   = null;
+  app.indoorHeights = [0];
+  app.outdoorHeight = 0;
+  app.pipes         = [[]];
+  app.pipeWIP           = [];
+  app.powerOutlet       = null;
+  app.outletHeight      = 0;
+  app.condensateDrain   = null;
+  app.powerPipe         = [];
+  app.condensatePipe    = [];
+  app.powerPipeWIP      = [];
+  app.condensatePipeWIP = [];
+  app.history           = [];
+  app.drawStart     = null;
+  app.wallStart     = null;
+  app.splitType     = 1;
+  app.activePipeIdx = 0;
+  app.bgImage       = null;
+  app.calibPt1      = null;
+  app.metersPerCell = 0.5;
+  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false };
+  MATERIALS_KEYS.forEach(key => {
+    const el = document.getElementById('mat-' + key);
+    if (el) el.checked = false;
+  });
+  app.indoorNotes = ['', '', ''];
+  app.outdoorNote = '';
+  app.holesNote   = '';
+  app.generalNote = '';
+
+  const scaleInput = document.getElementById('scale-input');
+  if (scaleInput) scaleInput.value = 0.5;
+
+  _syncBgImageUI();
+  loadTemplate('bilocale');
+  updateSplitUI();
+  updateHeightUI();
+  showDesignScreen();
+  setStatus('Nuovo progetto creato.');
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Dropdown menu setup
+// ════════════════════════════════════════════════════════════════
+function _initDropdowns() {
+  // Toggle open/close on button click; close others
+  document.querySelectorAll('.menu-btn').forEach(btn => {
+    const item = btn.closest('.menu-item');
+    const drop = item.querySelector('.menu-dropdown');
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const isOpen = drop.classList.contains('open');
+      _closeAllDropdowns();
+      if (!isOpen) {
+        drop.classList.add('open');
+        btn.classList.add('open');
+      }
+    });
+  });
+
+  // Close when clicking outside
+  document.addEventListener('click', _closeAllDropdowns);
+
+  // Prevent dropdown clicks from closing it immediately
+  document.querySelectorAll('.menu-dropdown').forEach(drop =>
+    drop.addEventListener('click', e => e.stopPropagation())
+  );
+
+  // ── Progetto dropdown items ───────────────────────────────────
+  document.getElementById('dd-save').addEventListener('click', () => {
+    _closeAllDropdowns(); saveProject();
+  });
+  document.getElementById('dd-import-bg').addEventListener('click', () => {
+    _closeAllDropdowns(); document.getElementById('bg-image-input').click();
+  });
+  document.getElementById('dd-clear-trace').addEventListener('click', () => {
+    _closeAllDropdowns(); clearActivePipeTrace();
+  });
+  document.getElementById('dd-clear-power').addEventListener('click', () => {
+    _closeAllDropdowns(); clearPowerPipeTrace();
+  });
+  document.getElementById('dd-clear-condensa').addEventListener('click', () => {
+    _closeAllDropdowns(); clearCondensatePipeTrace();
+  });
+  document.getElementById('dd-clear-all').addEventListener('click', () => {
+    _closeAllDropdowns(); clearAll();
+  });
+  document.getElementById('dd-quote').addEventListener('click', () => {
+    _closeAllDropdowns(); renderQuoteModal(); openModal('modal-quote');
+  });
+  document.getElementById('dd-print').addEventListener('click', () => {
+    _closeAllDropdowns(); printReport();
+  });
+
+  // ── Help dropdown items ───────────────────────────────────────
+  document.getElementById('dd-guide').addEventListener('click', () => {
+    _closeAllDropdowns(); openModal('modal-guide');
+  });
+  document.getElementById('dd-legend').addEventListener('click', () => {
+    _closeAllDropdowns(); openModal('modal-legend');
+  });
+}
+
+function _closeAllDropdowns() {
+  document.querySelectorAll('.menu-dropdown.open').forEach(d => d.classList.remove('open'));
+  document.querySelectorAll('.menu-btn.open').forEach(b => b.classList.remove('open'));
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Modal helpers
+// ════════════════════════════════════════════════════════════════
+function openModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'flex';
+}
+
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2673,19 +2834,33 @@ function undo() {
 // ════════════════════════════════════════════════════════════════
 //  Clear actions
 // ════════════════════════════════════════════════════════════════
-function clearPipe() {
+
+/** Clear the active pipe trace (always the current split trace, ignoring tool). */
+function clearActivePipeTrace() {
   saveHistory();
-  if (app.tool === 'drawPowerPipe') {
-    app.powerPipe = []; app.powerPipeWIP = [];
-    setStatus('Traccia corrente cancellata.');
-  } else if (app.tool === 'drawCondensaPipe') {
-    app.condensatePipe = []; app.condensatePipeWIP = [];
-    setStatus('Traccia condensa cancellata.');
-  } else {
-    app.pipes[app.activePipeIdx] = [];
-    app.pipeWIP = [];
-    setStatus(`Traccia ${app.activePipeIdx + 1} cancellata.`);
-  }
+  app.pipes[app.activePipeIdx] = [];
+  app.pipeWIP = [];
+  setStatus(`Traccia ${app.activePipeIdx + 1} cancellata.`);
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+}
+
+/** Clear the power (outlets) pipe trace. */
+function clearPowerPipeTrace() {
+  saveHistory();
+  app.powerPipe = []; app.powerPipeWIP = [];
+  setStatus('Traccia prese cancellata.');
+  syncCompletePipeBtn();
+  render();
+  updateResults();
+}
+
+/** Clear the condensate pipe trace. */
+function clearCondensatePipeTrace() {
+  saveHistory();
+  app.condensatePipe = []; app.condensatePipeWIP = [];
+  setStatus('Traccia condensa cancellata.');
   syncCompletePipeBtn();
   render();
   updateResults();
@@ -2714,7 +2889,7 @@ function clearAll() {
   app.wallStart     = null;
   app.splitType     = 1;
   app.activePipeIdx = 0;
-  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false };
   MATERIALS_KEYS.forEach(key => {
     const el = document.getElementById('mat-' + key);
     if (el) el.checked = false;
@@ -3296,7 +3471,8 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
   const MAT_LABELS = {
     staffaUE:         'Staffa unità esterna',
     lavaggioImpianto: 'Lavaggio impianto',
-    predisposizione:  'Predisposizione'
+    predisposizione:  'Predisposizione',
+    ponteggio:        'Ponteggio'
   };
   const checkedMats = MATERIALS_KEYS.filter(k => app.materials[k]);
   const materialsHTML = checkedMats.length > 0 ? `
@@ -3496,7 +3672,7 @@ function saveProject() {
   const projects = getStoredProjects();
   projects.unshift(project); // newest first
   _saveStoredProjects(projects);
-  renderProjectsList();
+  renderHomepageProjects('');
   setStatus(`Progetto "${projectName}" salvato.`);
 }
 
@@ -3521,7 +3697,7 @@ function loadProject(id) {
     app.pipes            = s.pipes            ?? [[]];
     app.splitType        = s.splitType        ?? 1;
     app.activePipeIdx    = s.activePipeIdx    ?? 0;
-    app.materials        = s.materials        ?? { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+    app.materials        = s.materials        ?? { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false };
     app.powerOutlet      = s.powerOutlet      ?? null;
     app.outletHeight     = s.outletHeight     ?? 0;
     app.condensateDrain  = s.condensateDrain  ?? null;
@@ -3549,13 +3725,26 @@ function loadProject(id) {
     syncCompletePipeBtn();
     updateSplitUI();
     updateHeightUI();
-    render();
-    updateResults();
+    showDesignScreen();
     setStatus(`Progetto "${project.name}" caricato.`);
   } catch (e) {
     console.error('loadProject error:', e);
     setStatus('Errore nel caricamento del progetto.');
   }
+}
+
+function renameProject(id) {
+  const projects = getStoredProjects();
+  const project  = projects.find(p => p.id === id);
+  if (!project) return;
+  const newName = prompt('Rinomina il progetto:', project.name);
+  if (newName === null) return; // cancelled
+  const trimmed = newName.trim();
+  if (!trimmed) return;
+  project.name = trimmed;
+  _saveStoredProjects(projects);
+  renderHomepageProjects(document.getElementById('hp-search-input').value.trim());
+  setStatus(`Progetto rinominato in "${trimmed}".`);
 }
 
 function deleteProject(id) {
@@ -3564,35 +3753,506 @@ function deleteProject(id) {
   if (!project) return;
   if (!confirm(`Eliminare il progetto "${project.name}"?`)) return;
   _saveStoredProjects(projects.filter(p => p.id !== id));
-  renderProjectsList();
+  renderHomepageProjects(document.getElementById('hp-search-input').value.trim());
   setStatus(`Progetto "${project.name}" eliminato.`);
 }
 
-function renderProjectsList() {
-  const container = document.getElementById('saved-projects-list');
+/** Render the projects list on the homepage, optionally filtered by name. */
+function renderHomepageProjects(filter) {
+  const container = document.getElementById('hp-projects-list');
   if (!container) return;
-  const projects = getStoredProjects();
+  const all      = getStoredProjects();
+  const q        = (filter || '').toLowerCase();
+  const projects = q ? all.filter(p => p.name.toLowerCase().includes(q)) : all;
   container.innerHTML = '';
   if (projects.length === 0) {
-    container.innerHTML = '<p class="no-projects">Nessun progetto salvato.</p>';
+    container.innerHTML = `<p class="hp-no-projects">${q ? 'Nessun progetto trovato.' : 'Nessun progetto salvato. Crea un nuovo progetto per iniziare!'}</p>`;
     return;
   }
   for (const p of projects) {
     const item = document.createElement('div');
-    item.className = 'saved-project-item';
+    item.className = 'hp-project-item';
     item.innerHTML =
-      `<div class="proj-info">` +
-        `<span class="proj-name">${_escHtml(p.name)}</span>` +
-        `<span class="proj-date">${_escHtml(new Date(p.savedAt).toLocaleString('it-IT'))}</span>` +
+      `<span class="hp-proj-icon">📁</span>` +
+      `<div class="hp-proj-info">` +
+        `<div class="hp-proj-name">${_escHtml(p.name)}</div>` +
+        `<div class="hp-proj-date">${_escHtml(new Date(p.savedAt).toLocaleString('it-IT'))}</div>` +
       `</div>` +
-      `<div class="proj-actions">` +
-        `<button class="proj-load-btn" title="Carica progetto">📂</button>` +
-        `<button class="proj-delete-btn" title="Elimina progetto">🗑</button>` +
+      `<div class="hp-proj-actions">` +
+        `<button class="hp-proj-btn" data-action="load"   title="Apri progetto">📂 Apri</button>` +
+        `<button class="hp-proj-btn rename" data-action="rename" title="Rinomina progetto">✏ Rinomina</button>` +
+        `<button class="hp-proj-btn del"    data-action="delete" title="Elimina progetto">🗑 Elimina</button>` +
       `</div>`;
-    item.querySelector('.proj-load-btn').addEventListener('click', () => loadProject(p.id));
-    item.querySelector('.proj-delete-btn').addEventListener('click', () => deleteProject(p.id));
+    item.querySelector('[data-action="load"]')  .addEventListener('click', () => loadProject(p.id));
+    item.querySelector('[data-action="rename"]').addEventListener('click', () => renameProject(p.id));
+    item.querySelector('[data-action="delete"]').addEventListener('click', () => deleteProject(p.id));
     container.appendChild(item);
   }
+}
+
+/** Legacy – kept so any internal calls still work. */
+function renderProjectsList() {
+  renderHomepageProjects(
+    (document.getElementById('hp-search-input') || {}).value || ''
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Gestione Listini  (price-list management)
+// ════════════════════════════════════════════════════════════════
+const LISTINI_KEY = 'climaListini';
+
+/** Fixed row definitions – do NOT change keys once in production (they are used as storage keys). */
+const LISTINI_ROWS = [
+  { key: 'mono_pred',    label: 'Installazione mono – predisposizione/sostituzione' },
+  { key: 'mono_new',     label: 'Installazione mono – nuovo impianto parete/parete' },
+  { key: 'dual_pred',    label: 'Installazione dual – predisposizione/sostituzione' },
+  { key: 'dual_new',     label: 'Installazione dual – nuovo impianto 3m linea' },
+  { key: 'trial_pred',   label: 'Installazione trial – predisposizione/sostituzione' },
+  { key: 'trial_new',    label: 'Installazione trial – nuovo impianto 3m linea' },
+  { key: 'staffa_mono',  label: 'Staffa mono' },
+  { key: 'staffa_multi', label: 'Staffa multi' },
+  { key: 'linea_mt',     label: 'Costo linea al metro (oltre 3 m)' },
+  { key: 'condensa_mt',  label: 'Costo linea condensa al metro (oltre 2 m)' },
+  { key: 'corrente_mt',  label: 'Costo linea corrente al metro (oltre 2 m)' },
+  { key: 'ponteggio',    label: 'Ponteggio' },
+];
+
+const LISTINI_MAX_COLS = 4;
+
+function getStoredListini() {
+  try {
+    const raw = localStorage.getItem(LISTINI_KEY);
+    if (!raw) return { installers: [], prices: {} };
+    return JSON.parse(raw);
+  } catch (e) {
+    return { installers: [], prices: {} };
+  }
+}
+
+function _saveStoredListini(data) {
+  localStorage.setItem(LISTINI_KEY, JSON.stringify(data));
+}
+
+/**
+ * (Re-)render the price-list table inside #listini-container.
+ * Called each time the settings modal opens, or after any edit.
+ */
+function renderListiniModal() {
+  const container = document.getElementById('listini-container');
+  if (!container) return;
+
+  const data = getStoredListini();
+  const numCols = data.installers.length;
+  const canAdd  = numCols < LISTINI_MAX_COLS;
+
+  // ── Toolbar ────────────────────────────────────────────────────
+  let html = '<div class="listini-toolbar">';
+  html += `<span class="listini-toolbar-info">` +
+    (numCols === 0
+      ? 'Nessun installatore aggiunto ancora. Aggiungi una colonna per inserire i prezzi.'
+      : `${numCols} installatore${numCols > 1 ? 'i' : ''} configurato${numCols > 1 ? 'i' : ''}`) +
+    `</span>`;
+  html += `<button class="listini-add-btn" id="listini-add-btn"${canAdd ? '' : ' disabled'}>` +
+    `＋ Aggiungi installatore</button>`;
+  html += '</div>';
+
+  // ── Empty state (no columns yet) ───────────────────────────────
+  if (numCols === 0) {
+    html += `<div class="listini-empty-state">` +
+      `<strong>Nessun listino presente</strong>` +
+      `Clicca <em>"Aggiungi installatore"</em> per creare la prima colonna di prezzi.` +
+      `</div>`;
+    container.innerHTML = html;
+    _bindListiniEvents(container, data);
+    return;
+  }
+
+  // ── Table ──────────────────────────────────────────────────────
+  html += '<div class="listini-scroll"><table class="listini-table"><thead><tr>';
+  html += '<th class="listini-th-label">Lavorazione</th>';
+
+  data.installers.forEach((name, idx) => {
+    html += `<th class="listini-th-installer">` +
+      `<div class="listini-installer-header">` +
+        `<span class="listini-installer-name" title="${_escHtml(name)}">${_escHtml(name)}</span>` +
+        `<div class="listini-installer-actions">` +
+          `<button class="listini-icon-btn" data-action="rename-col" data-col="${idx}" title="Rinomina">✏</button>` +
+          `<button class="listini-icon-btn danger" data-action="delete-col" data-col="${idx}" title="Elimina colonna">🗑</button>` +
+        `</div>` +
+      `</div>` +
+    `</th>`;
+  });
+
+  html += '</tr></thead><tbody>';
+
+  LISTINI_ROWS.forEach(row => {
+    html += `<tr><td class="listini-td-label">${_escHtml(row.label)}</td>`;
+    data.installers.forEach((_, idx) => {
+      const val = (data.prices[row.key] && data.prices[row.key][idx] !== undefined)
+        ? data.prices[row.key][idx] : '';
+      html += `<td class="listini-td-price">` +
+        `<div class="listini-price-wrap">` +
+          `<span class="listini-price-currency">€</span>` +
+          `<input class="listini-price-input" type="number" min="0" step="0.50"` +
+            ` data-row="${row.key}" data-col="${idx}"` +
+            ` value="${_escHtml(String(val))}" placeholder="—">` +
+        `</div>` +
+      `</td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+  _bindListiniEvents(container, data);
+}
+
+/** Attach all event listeners to the rendered listini markup. */
+function _bindListiniEvents(container, data) {
+  // Add column
+  const addBtn = document.getElementById('listini-add-btn');
+  if (addBtn && !addBtn.disabled) {
+    addBtn.addEventListener('click', () => {
+      const fresh = getStoredListini();
+      if (fresh.installers.length >= LISTINI_MAX_COLS) return;
+      const name = prompt(
+        'Nome del nuovo installatore:',
+        'Installatore ' + (fresh.installers.length + 1)
+      );
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      fresh.installers.push(trimmed);
+      _saveStoredListini(fresh);
+      renderListiniModal();
+    });
+  }
+
+  // Rename column
+  container.querySelectorAll('[data-action="rename-col"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const col   = parseInt(btn.dataset.col, 10);
+      const fresh = getStoredListini();
+      const cur   = fresh.installers[col] || '';
+      const name  = prompt('Nuovo nome installatore:', cur);
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      fresh.installers[col] = trimmed;
+      _saveStoredListini(fresh);
+      renderListiniModal();
+    });
+  });
+
+  // Delete column
+  container.querySelectorAll('[data-action="delete-col"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const col   = parseInt(btn.dataset.col, 10);
+      const fresh = getStoredListini();
+      if (!confirm(`Eliminare la colonna "${fresh.installers[col]}" e tutti i prezzi associati?`)) return;
+      fresh.installers.splice(col, 1);
+      // Remap column indices in prices (shift down)
+      Object.keys(fresh.prices).forEach(rowKey => {
+        const rowPrices = fresh.prices[rowKey];
+        const newRow    = {};
+        Object.keys(rowPrices).forEach(c => {
+          const ci = parseInt(c, 10);
+          if (ci < col)       newRow[ci]     = rowPrices[c];
+          else if (ci > col)  newRow[ci - 1] = rowPrices[c];
+          // ci === col: dropped
+        });
+        fresh.prices[rowKey] = newRow;
+      });
+      _saveStoredListini(fresh);
+      renderListiniModal();
+    });
+  });
+
+  // Price inputs – save on change (blur / Enter)
+  container.querySelectorAll('.listini-price-input').forEach(input => {
+    input.addEventListener('change', e => {
+      const rowKey = e.target.dataset.row;
+      const col    = parseInt(e.target.dataset.col, 10);
+      const val    = e.target.value.trim();
+      const fresh  = getStoredListini();
+      if (!fresh.prices[rowKey]) fresh.prices[rowKey] = {};
+      if (val === '') {
+        delete fresh.prices[rowKey][col];
+      } else {
+        fresh.prices[rowKey][col] = val;
+      }
+      _saveStoredListini(fresh);
+    });
+  });
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Valuta Preventivi  (quote evaluation)
+// ════════════════════════════════════════════════════════════════
+
+/** Format a number as Italian-style euro: "€ 123,50". Null → "—". */
+function _fmtEur(amount) {
+  if (amount === null || amount === undefined || isNaN(amount)) return '—';
+  return '\u20ac\u00a0' + amount.toFixed(2).replace('.', ',');
+}
+
+/**
+ * Compute quote data for all installers based on the current project state.
+ *
+ * Rules:
+ *   - Installation base: row key = `{mono|dual|trial}_{pred|new}`
+ *   - New install only: extra pipe meters = ceil(totalMeters) - 3, charged at `linea_mt` per metre
+ *   - Predisposizione/sostituzione: no pipe-line cost
+ *   - Power pipe: extra = ceil(totalMeters) - 2, charged at `corrente_mt` per metre
+ *   - Condensa pipe: extra = ceil(meters) - 2, charged at `condensa_mt` per metre
+ *   - Staffa: `staffa_mono` if single split, `staffa_multi` if dual/trial
+ *   - Ponteggio: not auto-computed (no project-state flag)
+ *
+ * @returns {{ installers: string[], lines: Array, totals: Array<number|null>, isPred: boolean, splitType: number }}
+ */
+function computeQuoteData() {
+  const data        = getStoredListini();
+  const numInst     = data.installers.length;
+  const isPred      = app.materials.predisposizione;
+  const splitType   = app.splitType;
+  const hasStaffa   = app.materials.staffaUE;
+
+  /** Get numeric price for rowKey + column index, or null if not set. */
+  const priceOf = (rowKey, ci) => {
+    const col = data.prices[rowKey];
+    if (!col || col[ci] === undefined || col[ci] === '') return null;
+    const v = parseFloat(col[ci]);
+    return isNaN(v) ? null : v;
+  };
+
+  const lines = []; // { label, amounts: [number|null, ...] }
+
+  // ── 1. Base installation ────────────────────────────────────────
+  const splitLabel = splitType === 1 ? 'mono' : splitType === 2 ? 'dual' : 'trial';
+  const instKey    = splitLabel + (isPred ? '_pred' : '_new');
+  const instRow    = LISTINI_ROWS.find(r => r.key === instKey);
+  lines.push({
+    label:   instRow ? instRow.label : instKey,
+    amounts: Array.from({ length: numInst }, (_, ci) => priceOf(instKey, ci)),
+    isSub:   false,
+  });
+
+  // ── 2. Extra pipe line metres (new installations only) ──────────
+  if (!isPred) {
+    const traceResults = calculateResults();
+    for (let ti = 0; ti < splitType; ti++) {
+      const r = traceResults[ti];
+      if (!r) continue;
+      const roundedM = Math.ceil(r.totalMeters);
+      const extraM   = Math.max(0, roundedM - 3);
+      if (extraM > 0) {
+        lines.push({
+          label:   `Linea T${ti + 1} extra (${extraM}\u00a0m oltre i 3\u00a0m inclusi)`,
+          amounts: Array.from({ length: numInst }, (_, ci) => {
+            const p = priceOf('linea_mt', ci);
+            return p !== null ? p * extraM : null;
+          }),
+          isSub: true,
+        });
+      }
+    }
+  }
+
+  // ── 3. Power pipe extra metres ──────────────────────────────────
+  const pcResults = calculatePowerCondensaResults();
+  if (pcResults.power) {
+    const powerM    = pcResults.power.totalMeters !== undefined
+      ? pcResults.power.totalMeters : pcResults.power.meters;
+    const roundedP  = Math.ceil(powerM);
+    const extraP    = Math.max(0, roundedP - 2);
+    if (extraP > 0) {
+      lines.push({
+        label:   `Linea corrente extra (${extraP}\u00a0m oltre i 2\u00a0m inclusi)`,
+        amounts: Array.from({ length: numInst }, (_, ci) => {
+          const p = priceOf('corrente_mt', ci);
+          return p !== null ? p * extraP : null;
+        }),
+        isSub: true,
+      });
+    }
+  }
+
+  // ── 4. Condensa pipe extra metres ───────────────────────────────
+  if (pcResults.condensa) {
+    const roundedC = Math.ceil(pcResults.condensa.meters);
+    const extraC   = Math.max(0, roundedC - 2);
+    if (extraC > 0) {
+      lines.push({
+        label:   `Linea condensa extra (${extraC}\u00a0m oltre i 2\u00a0m inclusi)`,
+        amounts: Array.from({ length: numInst }, (_, ci) => {
+          const p = priceOf('condensa_mt', ci);
+          return p !== null ? p * extraC : null;
+        }),
+        isSub: true,
+      });
+    }
+  }
+
+  // ── 5. Staffa ───────────────────────────────────────────────────
+  if (hasStaffa) {
+    const staffaKey = splitType === 1 ? 'staffa_mono' : 'staffa_multi';
+    const staffaRow = LISTINI_ROWS.find(r => r.key === staffaKey);
+    lines.push({
+      label:   staffaRow ? staffaRow.label : staffaKey,
+      amounts: Array.from({ length: numInst }, (_, ci) => priceOf(staffaKey, ci)),
+      isSub:   false,
+    });
+  }
+
+  // ── 6. Ponteggio ────────────────────────────────────────────────
+  if (app.materials.ponteggio) {
+    const pontRow = LISTINI_ROWS.find(r => r.key === 'ponteggio');
+    lines.push({
+      label:   pontRow ? pontRow.label : 'Ponteggio',
+      amounts: Array.from({ length: numInst }, (_, ci) => priceOf('ponteggio', ci)),
+      isSub:   false,
+    });
+  }
+
+  // ── Totals ──────────────────────────────────────────────────────
+  const totals = Array.from({ length: numInst }, (_, ci) => {
+    let sum = 0, hasAny = false;
+    for (const line of lines) {
+      const a = line.amounts[ci];
+      if (a !== null) { sum += a; hasAny = true; }
+    }
+    return hasAny ? sum : null;
+  });
+
+  return { installers: data.installers, lines, totals, isPred, splitType };
+}
+
+/**
+ * (Re-)render the quote comparison table inside #quote-container.
+ * Called each time the modal is opened.
+ */
+function renderQuoteModal() {
+  const container = document.getElementById('quote-container');
+  if (!container) return;
+
+  const traceResults = calculateResults();
+  const pcResults    = calculatePowerCondensaResults();
+  const splitNames   = ['Mono (1 split)', 'Dual (2 split)', 'Trial (3 split)'];
+  const splitType    = app.splitType;
+  const isPred       = app.materials.predisposizione;
+
+  // ── Project context card ────────────────────────────────────────
+  let ctx = '<div class="quote-context">';
+  ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Configurazione</span>` +
+    `<span class="quote-ctx-val">${_escHtml(splitNames[splitType - 1])}</span></div>`;
+  ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Tipo lavoro</span>` +
+    `<span class="quote-ctx-val">${isPred ? 'Predisposizione / Sostituzione' : 'Nuovo impianto'}</span></div>`;
+
+  for (let ti = 0; ti < splitType; ti++) {
+    const r = traceResults[ti];
+    const label = splitType > 1 ? `Traccia T${ti + 1}` : 'Traccia';
+    const color = PIPE_COLORS[ti];
+    if (r) {
+      const roundedM = Math.ceil(r.totalMeters);
+      const extraM   = (!isPred) ? Math.max(0, roundedM - 3) : 0;
+      const detail   = isPred
+        ? `${roundedM}\u00a0m (non addebitata)`
+        : extraM > 0
+          ? `${roundedM}\u00a0m (3 inclusi + ${extraM} extra)`
+          : `${roundedM}\u00a0m (inclusi nel base)`;
+      ctx += `<div class="quote-ctx-item">` +
+        `<span class="quote-ctx-lbl" style="color:${color}">${_escHtml(label)}</span>` +
+        `<span class="quote-ctx-val">${_escHtml(detail)}</span></div>`;
+    }
+  }
+  if (pcResults.power) {
+    const powerM   = pcResults.power.totalMeters !== undefined
+      ? pcResults.power.totalMeters : pcResults.power.meters;
+    const roundedP = Math.ceil(powerM);
+    const extraP   = Math.max(0, roundedP - 2);
+    const detail   = extraP > 0
+      ? `${roundedP}\u00a0m (2 inclusi + ${extraP} extra)`
+      : `${roundedP}\u00a0m (inclusi nel base)`;
+    ctx += `<div class="quote-ctx-item">` +
+      `<span class="quote-ctx-lbl" style="color:${POWER_COLOR}">⚡ Corrente</span>` +
+      `<span class="quote-ctx-val">${_escHtml(detail)}</span></div>`;
+  }
+  if (pcResults.condensa) {
+    const roundedC = Math.ceil(pcResults.condensa.meters);
+    const extraC   = Math.max(0, roundedC - 2);
+    const detail   = extraC > 0
+      ? `${roundedC}\u00a0m (2 inclusi + ${extraC} extra)`
+      : `${roundedC}\u00a0m (inclusi nel base)`;
+    ctx += `<div class="quote-ctx-item">` +
+      `<span class="quote-ctx-lbl" style="color:${CONDENSA_COLOR}">💧 Condensa</span>` +
+      `<span class="quote-ctx-val">${_escHtml(detail)}</span></div>`;
+  }
+  if (app.materials.staffaUE) {
+    ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Staffa u.e.</span>` +
+      `<span class="quote-ctx-val">Sì</span></div>`;
+  }
+  if (app.materials.lavaggioImpianto) {
+    ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Lavaggio impianto</span>` +
+      `<span class="quote-ctx-val">Sì (non in listino)</span></div>`;
+  }
+  if (app.materials.ponteggio) {
+    ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Ponteggio</span>` +
+      `<span class="quote-ctx-val">Sì</span></div>`;
+  }
+  ctx += '</div>';
+
+  // ── No installers configured ────────────────────────────────────
+  const qData = computeQuoteData();
+  if (qData.installers.length === 0) {
+    container.innerHTML = ctx +
+      `<div class="listini-empty-state" style="margin-top:16px">` +
+      `<strong>Nessun listino configurato</strong>` +
+      `Configura almeno un installatore in ⚙ Impostazioni → Gestione Listini.` +
+      `</div>`;
+    return;
+  }
+
+  // ── Comparison table ────────────────────────────────────────────
+  let html = ctx + '<div class="listini-scroll" style="margin-top:16px"><table class="quote-table"><thead><tr>';
+  html += '<th class="quote-th-label">Voce</th>';
+  qData.installers.forEach(name =>
+    html += `<th class="quote-th-amount">${_escHtml(name)}</th>`
+  );
+  html += '</tr></thead><tbody>';
+
+  qData.lines.forEach(line => {
+    html += `<tr class="${line.isSub ? 'quote-row-sub' : ''}">`;
+    html += `<td class="quote-td-label">${_escHtml(line.label)}</td>`;
+    line.amounts.forEach(a => {
+      const cls = a !== null ? 'quote-td-amount' : 'quote-td-amount quote-td-missing';
+      html += `<td class="${cls}">${_fmtEur(a)}</td>`;
+    });
+    html += '</tr>';
+  });
+
+  // Total row (IVA excluded)
+  html += '<tr class="quote-total-row"><td class="quote-td-label">💶 Totale (IVA esclusa)</td>';
+  qData.totals.forEach(t => {
+    const cls = t !== null ? 'quote-td-amount' : 'quote-td-amount quote-td-missing';
+    html += `<td class="${cls}">${_fmtEur(t)}</td>`;
+  });
+  html += '</tr>';
+
+  // IVA 10% row
+  html += '<tr class="quote-iva-row"><td class="quote-td-label">💶 Totale IVA 10% inclusa</td>';
+  qData.totals.forEach(t => {
+    const cls = t !== null ? 'quote-td-amount' : 'quote-td-amount quote-td-missing';
+    html += `<td class="${cls}">${_fmtEur(t !== null ? t * 1.10 : null)}</td>`;
+  });
+  html += '</tr></tbody></table></div>';
+
+  html += `<p class="quote-disclaimer">Prezzi IVA inclusa a noi.</p>`;
+
+  html += `<p class="quote-footnote">I prezzi sono indicativi e basati sui listini configurati. ` +
+    `Le distanze tracce sono arrotondate per eccesso al metro intero.</p>`;
+
+  container.innerHTML = html;
 }
 
 // ════════════════════════════════════════════════════════════════

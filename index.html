@@ -15,284 +15,356 @@
         <img src="logo.svg" alt="Trony Manerbio" class="header-logo-img">
         <h1>Preventivatore Installazione Climatizzatore</h1>
       </div>
-      <div class="header-right">
+
+      <!-- Design-screen menu bar (hidden on homepage) -->
+      <nav id="design-menubar" class="header-menubar" style="display:none">
+        <!-- Progetto dropdown -->
+        <div class="menu-item" id="menu-progetto">
+          <button class="menu-btn" id="menu-progetto-btn">📁 Progetto ▾</button>
+          <div class="menu-dropdown" id="menu-progetto-drop">
+            <button class="menu-drop-item" id="dd-save">💾 Salva progetto</button>
+            <div class="menu-sep"></div>
+            <button class="menu-drop-item" id="dd-import-bg">📷 Importa planimetria</button>
+            <div class="menu-sep"></div>
+            <button class="menu-drop-item" id="dd-clear-trace">✂ Cancella traccia</button>
+            <button class="menu-drop-item" id="dd-clear-power">🔌 Cancella traccia prese</button>
+            <button class="menu-drop-item" id="dd-clear-condensa">💦 Cancella traccia condensa</button>
+            <div class="menu-sep"></div>
+            <button class="menu-drop-item danger" id="dd-clear-all">🗑 Cancella tutto</button>
+            <div class="menu-sep"></div>
+            <button class="menu-drop-item" id="dd-quote">💰 Valuta preventivi</button>
+            <button class="menu-drop-item" id="dd-print">🖨 Stampa A4</button>
+          </div>
+        </div>
+
+        <!-- Help dropdown -->
+        <div class="menu-item" id="menu-help">
+          <button class="menu-btn" id="menu-help-btn">❓ Help ▾</button>
+          <div class="menu-dropdown" id="menu-help-drop">
+            <button class="menu-drop-item" id="dd-guide">📋 Guida rapida</button>
+            <button class="menu-drop-item" id="dd-legend">🎨 Legenda</button>
+          </div>
+        </div>
+
         <span id="status-bar">Pronto – scegli un template o inizia a disegnare</span>
+      </nav>
+
+      <div class="header-right">
+        <button id="back-to-home-btn" class="header-icon-btn" style="display:none" title="Torna alla Home">🏠</button>
+        <button id="settings-btn" class="header-icon-btn" title="Impostazioni">⚙</button>
       </div>
     </header>
 
-    <!-- ── Main layout ─────────────────────────────────────────── -->
-    <div id="main-layout">
+    <!-- ══════════════════════════════════════════════════════════
+         HOMEPAGE
+    ══════════════════════════════════════════════════════════ -->
+    <div id="homepage">
+      <div class="hp-content">
+        <div class="hp-actions">
+          <button id="new-project-btn" class="hp-new-btn">
+            <span class="hp-new-icon">＋</span>
+            Nuovo Progetto
+          </button>
+        </div>
 
-      <!-- Left sidebar: tools & templates -->
-      <aside id="left-sidebar">
-
-        <section class="sb-section">
-          <h3>Strumenti</h3>
-          <div id="tools-grid">
-            <button class="tool-btn active" data-tool="select"
-                    title="Seleziona e sposta elementi">
-              <span class="ti">↖</span><span class="tl">Seleziona</span>
-            </button>
-            <button class="tool-btn" data-tool="drawRoom"
-                    title="Trascina per disegnare una stanza">
-              <span class="ti">⬜</span><span class="tl">Stanza</span>
-            </button>
-            <button class="tool-btn" data-tool="drawBalcony"
-                    title="Trascina per disegnare un balcone">
-              <span class="ti">🌿</span><span class="tl">Balcone</span>
-            </button>
-            <button class="tool-btn" data-tool="drawStairs"
-                    title="Trascina per disegnare una scala">
-              <span class="ti">🪜</span><span class="tl">Scale</span>
-            </button>
-            <button class="tool-btn" data-tool="drawWall"
-                    title="Clic inizio → clic fine per una parete">
-              <span class="ti">━</span><span class="tl">Parete</span>
-            </button>
-            <button class="tool-btn" data-tool="placeIndoor"
-                    title="Clic per posizionare lo split interno">
-              <span class="ti">❄</span><span class="tl">Split Int.</span>
-            </button>
-            <button class="tool-btn" data-tool="placeOutdoor"
-                    title="Clic per posizionare l'unità esterna">
-              <span class="ti">🌡</span><span class="tl">U. Esterna</span>
-            </button>
-            <button class="tool-btn" data-tool="drawPipe"
-                    title="Clic per aggiungere punti; doppio-clic per completare">
-              <span class="ti">〰</span><span class="tl">Traccia</span>
-            </button>
-            <button class="tool-btn" data-tool="placeOutlet"
-                    title="Posiziona presa di corrente a parete">
-              <span class="ti">🔌</span><span class="tl">Presa</span>
-            </button>
-            <button class="tool-btn" data-tool="placeDrain"
-                    title="Posiziona scarico condensa a parete">
-              <span class="ti">💧</span><span class="tl">Scarico</span>
-            </button>
-            <button class="tool-btn" data-tool="drawPowerPipe"
-                    title="Disegna traccia corrente elettrica">
-              <span class="ti">⚡</span><span class="tl">T. Corr.</span>
-            </button>
-            <button class="tool-btn" data-tool="drawCondensaPipe"
-                    title="Disegna traccia condensa">
-              <span class="ti">💦</span><span class="tl">T. Cond.</span>
-            </button>
-            <button class="tool-btn" data-tool="calibrate" id="calib-tool-btn"
-                    title="Calibra planimetria di sfondo: clic su 2 punti → inserisci la misura reale" disabled>
-              <span class="ti">📐</span><span class="tl">Calibra</span>
-            </button>
+        <div class="hp-projects-panel">
+          <div class="hp-projects-header">
+            <h2>Progetti salvati</h2>
+            <div class="hp-search-wrap">
+              <span class="hp-search-icon">🔍</span>
+              <input type="text" id="hp-search-input" placeholder="Cerca per nome…" />
+            </div>
           </div>
-        </section>
-
-        <section class="sb-section">
-          <h3>Planimetria</h3>
-          <input type="file" id="bg-image-input" accept="image/*" style="display:none" />
-          <div class="action-btns">
-            <button class="act-btn" id="bg-upload-btn" title="Carica un file JPEG/PNG come sfondo da tracciare">
-              📷 Carica immagine
-            </button>
-            <label class="bg-opacity-label" title="Trasparenza della planimetria di sfondo">
-              Opacità
-              <input type="range" id="bg-opacity-slider" min="10" max="100" value="40" />
-            </label>
-            <button class="act-btn" id="bg-toggle-btn" disabled>
-              👁 Nascondi
-            </button>
-            <button class="act-btn danger" id="bg-remove-btn" disabled>
-              🗑 Rimuovi
-            </button>
-          </div>
-        </section>
-
-        <section class="sb-section">
-          <h3>Configurazione</h3>
-          <div id="split-btns">
-            <button class="split-btn active" data-split="1" title="Singolo split">1 Split</button>
-            <button class="split-btn" data-split="2" title="Dual split">2 Split</button>
-            <button class="split-btn" data-split="3" title="Trial split">3 Split</button>
-          </div>
-          <div id="trace-btns" style="margin-top:5px;">
-            <!-- populated dynamically by JS -->
-          </div>
-        </section>
-
-        <section class="sb-section">
-          <h3>Template planimetrie</h3>
-          <div id="template-btns">
-            <button class="tpl-btn" data-template="studio">Monolocale</button>
-            <button class="tpl-btn" data-template="bilocale">Bilocale</button>
-            <button class="tpl-btn" data-template="trilocale">Trilocale</button>
-            <button class="tpl-btn" data-template="quadrilocale">Quadrilocale</button>
-          </div>
-        </section>
-
-        <section class="sb-section">
-          <h3>Scala</h3>
-          <div class="scale-row">
-            <label>
-              1 cella =
-              <input id="scale-input" type="number"
-                     value="0.5" min="0.1" max="5" step="0.1" />
-              m
-            </label>
-            <small>(1 cella = 20 px)</small>
-          </div>
-        </section>
-
-        <section class="sb-section" id="heights-section">
-          <h3>Altezze da suolo</h3>
-          <div id="heights-inputs">
+          <div id="hp-projects-list">
             <!-- populated dynamically -->
           </div>
-        </section>
-
-        <section class="sb-section">
-          <div class="action-btns">
-            <button id="complete-pipe-btn" class="act-btn primary" disabled>
-              ✅ Completa traccia
-            </button>
-            <button id="undo-btn" class="act-btn" title="Ctrl+Z">
-              ↩ Annulla
-            </button>
-            <button id="clear-pipe-btn" class="act-btn">
-              ✂ Cancella traccia
-            </button>
-            <button id="clear-all-btn" class="act-btn danger">
-              🗑 Cancella tutto
-            </button>
-            <button id="print-btn" class="act-btn print">
-              🖨 Stampa A4
-            </button>
-            <button id="save-project-btn" class="act-btn save">
-              💾 Salva progetto
-            </button>
-          </div>
-        </section>
-
-        <section class="sb-section" id="saved-projects-section">
-          <h3>📂 Progetti salvati</h3>
-          <div id="saved-projects-list">
-            <!-- populated dynamically -->
-          </div>
-        </section>
-
-      </aside>
-
-      <!-- Centre: canvas + status bar -->
-      <div id="canvas-wrapper">
-        <canvas id="main-canvas"></canvas>
-        <div id="canvas-status">
-          <span id="mouse-pos">0.0 m, 0.0 m</span>
-          <div class="zoom-controls">
-            <button id="zoom-out-btn" class="zoom-btn" title="Zoom out">−</button>
-            <span id="zoom-level">100%</span>
-            <button id="zoom-in-btn" class="zoom-btn" title="Zoom in">+</button>
-            <button id="zoom-reset-btn" class="zoom-btn" title="Reset zoom (1:1)">⊙ 1:1</button>
-          </div>
-          <span id="tool-hint"></span>
         </div>
       </div>
+    </div>
 
-      <!-- Right sidebar: results & guide -->
-      <aside id="right-sidebar">
+    <!-- ══════════════════════════════════════════════════════════
+         DESIGN SCREEN
+    ══════════════════════════════════════════════════════════ -->
+    <div id="design-screen" style="display:none">
+      <div id="main-layout">
 
-        <section class="sb-section results-section">
-          <h3>📐 Risultati calcolo</h3>
-          <div id="results-per-trace">
-            <!-- populated dynamically -->
+        <!-- Left sidebar: tools & templates -->
+        <aside id="left-sidebar">
+
+          <section class="sb-section">
+            <h3>Strumenti</h3>
+            <div id="tools-grid">
+              <button class="tool-btn active" data-tool="select"
+                      title="Seleziona e sposta elementi">
+                <span class="ti">↖</span><span class="tl">Seleziona</span>
+              </button>
+              <button class="tool-btn" data-tool="drawRoom"
+                      title="Trascina per disegnare una stanza">
+                <span class="ti">⬜</span><span class="tl">Stanza</span>
+              </button>
+              <button class="tool-btn" data-tool="drawBalcony"
+                      title="Trascina per disegnare un balcone">
+                <span class="ti">🌿</span><span class="tl">Balcone</span>
+              </button>
+              <button class="tool-btn" data-tool="drawStairs"
+                      title="Trascina per disegnare una scala">
+                <span class="ti">🪜</span><span class="tl">Scale</span>
+              </button>
+              <button class="tool-btn" data-tool="drawWall"
+                      title="Clic inizio → clic fine per una parete">
+                <span class="ti">━</span><span class="tl">Parete</span>
+              </button>
+              <button class="tool-btn" data-tool="placeIndoor"
+                      title="Clic per posizionare lo split interno">
+                <span class="ti">❄</span><span class="tl">Split Int.</span>
+              </button>
+              <button class="tool-btn" data-tool="placeOutdoor"
+                      title="Clic per posizionare l'unità esterna">
+                <span class="ti">🌡</span><span class="tl">U. Esterna</span>
+              </button>
+              <button class="tool-btn" data-tool="drawPipe"
+                      title="Clic per aggiungere punti; doppio-clic per completare">
+                <span class="ti">〰</span><span class="tl">Traccia</span>
+              </button>
+              <button class="tool-btn" data-tool="placeOutlet"
+                      title="Posiziona presa di corrente a parete">
+                <span class="ti">🔌</span><span class="tl">Presa</span>
+              </button>
+              <button class="tool-btn" data-tool="placeDrain"
+                      title="Posiziona scarico condensa a parete">
+                <span class="ti">💧</span><span class="tl">Scarico</span>
+              </button>
+              <button class="tool-btn" data-tool="drawPowerPipe"
+                      title="Disegna traccia corrente elettrica">
+                <span class="ti">⚡</span><span class="tl">T. Corr.</span>
+              </button>
+              <button class="tool-btn" data-tool="drawCondensaPipe"
+                      title="Disegna traccia condensa">
+                <span class="ti">💦</span><span class="tl">T. Cond.</span>
+              </button>
+              <button class="tool-btn" data-tool="calibrate" id="calib-tool-btn"
+                      title="Calibra planimetria di sfondo: clic su 2 punti → inserisci la misura reale" disabled>
+                <span class="ti">📐</span><span class="tl">Calibra</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="sb-section">
+            <h3>Planimetria</h3>
+            <input type="file" id="bg-image-input" accept="image/*" style="display:none" />
+            <div class="action-btns">
+              <label class="bg-opacity-label" title="Trasparenza della planimetria di sfondo">
+                Opacità
+                <input type="range" id="bg-opacity-slider" min="10" max="100" value="40" />
+              </label>
+              <button class="act-btn" id="bg-toggle-btn" disabled>
+                👁 Nascondi
+              </button>
+              <button class="act-btn danger" id="bg-remove-btn" disabled>
+                🗑 Rimuovi
+              </button>
+            </div>
+          </section>
+
+          <section class="sb-section">
+            <h3>Configurazione</h3>
+            <div id="split-btns">
+              <button class="split-btn active" data-split="1" title="Singolo split">1 Split</button>
+              <button class="split-btn" data-split="2" title="Dual split">2 Split</button>
+              <button class="split-btn" data-split="3" title="Trial split">3 Split</button>
+            </div>
+            <div id="trace-btns" style="margin-top:5px;">
+              <!-- populated dynamically by JS -->
+            </div>
+          </section>
+
+          <section class="sb-section">
+            <h3>Template planimetrie</h3>
+            <div id="template-btns">
+              <button class="tpl-btn" data-template="studio">Monolocale</button>
+              <button class="tpl-btn" data-template="bilocale">Bilocale</button>
+              <button class="tpl-btn" data-template="trilocale">Trilocale</button>
+              <button class="tpl-btn" data-template="quadrilocale">Quadrilocale</button>
+            </div>
+          </section>
+
+          <section class="sb-section">
+            <h3>Scala</h3>
+            <div class="scale-row">
+              <label>
+                1 cella =
+                <input id="scale-input" type="number"
+                       value="0.5" min="0.1" max="5" step="0.1" />
+                m
+              </label>
+              <small>(1 cella = 20 px)</small>
+            </div>
+          </section>
+
+          <section class="sb-section" id="heights-section">
+            <h3>Altezze da suolo</h3>
+            <div id="heights-inputs">
+              <!-- populated dynamically -->
+            </div>
+          </section>
+
+          <section class="sb-section">
+            <div class="action-btns">
+              <button id="complete-pipe-btn" class="act-btn primary" disabled>
+                ✅ Completa traccia
+              </button>
+              <button id="undo-btn" class="act-btn" title="Ctrl+Z">
+                ↩ Annulla
+              </button>
+            </div>
+          </section>
+
+        </aside>
+
+        <!-- Centre: canvas + status bar -->
+        <div id="canvas-wrapper">
+          <canvas id="main-canvas"></canvas>
+          <div id="canvas-status">
+            <span id="mouse-pos">0.0 m, 0.0 m</span>
+            <div class="zoom-controls">
+              <button id="zoom-out-btn" class="zoom-btn" title="Zoom out">−</button>
+              <span id="zoom-level">100%</span>
+              <button id="zoom-in-btn" class="zoom-btn" title="Zoom in">+</button>
+              <button id="zoom-reset-btn" class="zoom-btn" title="Reset zoom (1:1)">⊙ 1:1</button>
+            </div>
+            <span id="tool-hint"></span>
           </div>
-          <div class="res-row res-total">
-            <span class="res-lbl">Complessità:</span>
-            <span class="res-val" id="res-complexity">—</span>
-          </div>
-        </section>
+        </div>
 
-        <section class="sb-section">
-          <h3>🔧 Materiali / Lavori</h3>
-          <div id="materials-list">
-            <label class="mat-item">
-              <input type="checkbox" id="mat-staffaUE"> Staffa u.e.
-            </label>
-            <label class="mat-item">
-              <input type="checkbox" id="mat-lavaggioImpianto"> Lavaggio impianto
-            </label>
-            <label class="mat-item">
-              <input type="checkbox" id="mat-predisposizione"> Predisposizione
-            </label>
-          </div>
-        </section>
+        <!-- Right sidebar: results & notes -->
+        <aside id="right-sidebar">
 
-        <section class="sb-section" id="notes-section">
-          <h3>📝 Note stampa</h3>
-          <div id="notes-inputs">
-            <!-- populated dynamically like heights-inputs -->
-          </div>
-        </section>
+          <section class="sb-section results-section">
+            <h3>📐 Risultati calcolo</h3>
+            <div id="results-per-trace">
+              <!-- populated dynamically -->
+            </div>
+            <div class="res-row res-total">
+              <span class="res-lbl">Complessità:</span>
+              <span class="res-val" id="res-complexity">—</span>
+            </div>
+          </section>
 
-        <section class="sb-section">
-          <h3>🎨 Legenda</h3>
-          <div id="legend">
-            <div class="leg-item">
-              <span class="leg-sw wall-sw"></span>Pareti / Stanze
+          <section class="sb-section">
+            <h3>🔧 Materiali / Lavori</h3>
+            <div id="materials-list">
+              <label class="mat-item">
+                <input type="checkbox" id="mat-staffaUE"> Staffa u.e.
+              </label>
+              <label class="mat-item">
+                <input type="checkbox" id="mat-lavaggioImpianto"> Lavaggio impianto
+              </label>
+              <label class="mat-item">
+                <input type="checkbox" id="mat-predisposizione"> Predisposizione
+              </label>
+              <label class="mat-item">
+                <input type="checkbox" id="mat-ponteggio"> Ponteggio
+              </label>
             </div>
-            <div class="leg-item">
-              <span class="leg-sw" style="background:#e8f5e9;border:2px dashed #388E3C"></span>Balcone
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw" style="background:#f5f0e8;border:2px solid #5d4037"></span>Scale
-            <div class="leg-item">
-              <span class="leg-sw indoor-sw" style="background:#1976D2"></span>Split Int. 1
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw indoor-sw" style="background:#F57C00"></span>Split Int. 2
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw indoor-sw" style="background:#7B1FA2"></span>Split Int. 3
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw outdoor-sw"></span>Unità esterna
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw" style="background:#E91E63"></span>Traccia 1
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw" style="background:#FF9800"></span>Traccia 2
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw" style="background:#9C27B0"></span>Traccia 3
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw" style="background:#FF5722;border:1px dashed #BF360C"></span>Traccia corrente
-            </div>
-            <div class="leg-item">
-              <span class="leg-sw" style="background:#00BCD4;border:1px dashed #006064"></span>Traccia condensa
-            </div>
-          </div>
-        </section>
+          </section>
 
-        <section class="sb-section">
-          <h3>📋 Guida rapida</h3>
-          <ol id="guide">
-            <li>Scegli un template <em>oppure</em> disegna stanze / pareti</li>
-            <li>In <strong>Configurazione</strong> scegli <em>1 Split</em>, <em>2 Split</em> o <em>3 Split</em></li>
-            <li>Seleziona la traccia attiva con i pulsanti <strong>T1 / T2 / T3</strong></li>
-            <li>Usa <strong>Split Int.</strong> per posizionare lo split <em>vicino a una parete</em></li>
-            <li>Usa <strong>U. Esterna</strong> per l'unità esterna <em>vicino a una parete</em></li>
-            <li>Usa <strong>Traccia</strong> e clicca i punti del percorso per la traccia attiva</li>
-            <li>Doppio-clic (o <em>Completa traccia</em>) per finire la traccia</li>
-            <li>Leggi distanza e pareti attraversate (per ogni traccia) qui a destra</li>
-            <li>Con <strong>Seleziona</strong>, doppio-clic su una stanza per <em>rinominarla</em> e modificarne larghezza e profondità; doppio-clic su un lato o su una parete per modificarne solo la lunghezza</li>
-            <li>Con <strong>Seleziona</strong>, trascina le icone <strong>↕ ↔</strong> al centro di ogni lato della stanza per ridimensionarla liberamente</li>
-            <li>Usa <strong>Balcone</strong> per disegnare un'area esterna (bordo verde tratteggiato); doppio-clic per rinominare</li>
-            <li>Usa <strong>Scale</strong> per disegnare un vano scala; doppio-clic per rinominare</li>
-            <li>Con <strong>Seleziona</strong>, trascina il riquadro <strong>🔌 PRESA</strong> o <strong>💧 SCAR.</strong> per riposizionare la legenda liberamente mantenendo il segnaposto sulla parete</li>
-          </ol>
-          <p class="hint-esc">Premi <kbd>Esc</kbd> per annullare l'operazione corrente. <kbd>Ctrl+Z</kbd> per annullare l'ultima azione.</p>
-        </section>
+          <section class="sb-section" id="notes-section">
+            <h3>📝 Note stampa</h3>
+            <div id="notes-inputs">
+              <!-- populated dynamically like heights-inputs -->
+            </div>
+          </section>
 
-      </aside>
-    </div><!-- /#main-layout -->
+        </aside>
+      </div><!-- /#main-layout -->
+    </div><!-- /#design-screen -->
+
   </div><!-- /#app -->
+
+  <!-- ── Modals ──────────────────────────────────────────────── -->
+
+  <!-- Guide modal -->
+  <div id="modal-guide" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2>📋 Guida rapida</h2>
+        <button class="modal-close" data-modal="modal-guide">✕</button>
+      </div>
+      <div class="modal-body">
+        <ol id="guide">
+          <li>Scegli un template <em>oppure</em> disegna stanze / pareti</li>
+          <li>In <strong>Configurazione</strong> scegli <em>1 Split</em>, <em>2 Split</em> o <em>3 Split</em></li>
+          <li>Seleziona la traccia attiva con i pulsanti <strong>T1 / T2 / T3</strong></li>
+          <li>Usa <strong>Split Int.</strong> per posizionare lo split <em>vicino a una parete</em></li>
+          <li>Usa <strong>U. Esterna</strong> per l'unità esterna <em>vicino a una parete</em></li>
+          <li>Usa <strong>Traccia</strong> e clicca i punti del percorso per la traccia attiva</li>
+          <li>Doppio-clic (o <em>Completa traccia</em>) per finire la traccia</li>
+          <li>Leggi distanza e pareti attraversate (per ogni traccia) qui a destra</li>
+          <li>Con <strong>Seleziona</strong>, doppio-clic su una stanza per <em>rinominarla</em> e modificarne larghezza e profondità; doppio-clic su un lato o su una parete per modificarne solo la lunghezza</li>
+          <li>Con <strong>Seleziona</strong>, trascina le icone <strong>↕ ↔</strong> al centro di ogni lato della stanza per ridimensionarla liberamente</li>
+          <li>Usa <strong>Balcone</strong> per disegnare un'area esterna (bordo verde tratteggiato); doppio-clic per rinominare</li>
+          <li>Usa <strong>Scale</strong> per disegnare un vano scala; doppio-clic per rinominare</li>
+          <li>Con <strong>Seleziona</strong>, trascina il riquadro <strong>🔌 PRESA</strong> o <strong>💧 SCAR.</strong> per riposizionare la legenda liberamente mantenendo il segnaposto sulla parete</li>
+        </ol>
+        <p class="hint-esc">Premi <kbd>Esc</kbd> per annullare l'operazione corrente. <kbd>Ctrl+Z</kbd> per annullare l'ultima azione.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Legend modal -->
+  <div id="modal-legend" class="modal-overlay" style="display:none">
+    <div class="modal-box modal-box-sm">
+      <div class="modal-header">
+        <h2>🎨 Legenda</h2>
+        <button class="modal-close" data-modal="modal-legend">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="legend">
+          <div class="leg-item"><span class="leg-sw wall-sw"></span>Pareti / Stanze</div>
+          <div class="leg-item"><span class="leg-sw" style="background:#e8f5e9;border:2px dashed #388E3C"></span>Balcone</div>
+          <div class="leg-item"><span class="leg-sw" style="background:#f5f0e8;border:2px solid #5d4037"></span>Scale</div>
+          <div class="leg-item"><span class="leg-sw indoor-sw" style="background:#1976D2"></span>Split Int. 1</div>
+          <div class="leg-item"><span class="leg-sw indoor-sw" style="background:#F57C00"></span>Split Int. 2</div>
+          <div class="leg-item"><span class="leg-sw indoor-sw" style="background:#7B1FA2"></span>Split Int. 3</div>
+          <div class="leg-item"><span class="leg-sw outdoor-sw"></span>Unità esterna</div>
+          <div class="leg-item"><span class="leg-sw" style="background:#E91E63"></span>Traccia 1</div>
+          <div class="leg-item"><span class="leg-sw" style="background:#FF9800"></span>Traccia 2</div>
+          <div class="leg-item"><span class="leg-sw" style="background:#9C27B0"></span>Traccia 3</div>
+          <div class="leg-item"><span class="leg-sw" style="background:#FF5722;border:1px dashed #BF360C"></span>Traccia corrente</div>
+          <div class="leg-item"><span class="leg-sw" style="background:#00BCD4;border:1px dashed #006064"></span>Traccia condensa</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quote modal -->
+  <div id="modal-quote" class="modal-overlay" style="display:none">
+    <div class="modal-box modal-box-xl">
+      <div class="modal-header">
+        <h2>💰 Valuta Preventivi</h2>
+        <button class="modal-close" data-modal="modal-quote">✕</button>
+      </div>
+      <div class="modal-body" id="quote-container">
+        <!-- populated dynamically by renderQuoteModal() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="modal-settings" class="modal-overlay" style="display:none">
+    <div class="modal-box modal-box-xl">
+      <div class="modal-header">
+        <h2>⚙ Impostazioni</h2>
+        <button class="modal-close" data-modal="modal-settings">✕</button>
+      </div>
+      <div class="modal-tabs" role="tablist">
+        <button class="modal-tab active" role="tab" aria-selected="true" data-tab="listini">📋 Gestione Listini</button>
+      </div>
+      <div class="modal-body" id="listini-container">
+        <!-- populated dynamically by renderListiniModal() -->
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
