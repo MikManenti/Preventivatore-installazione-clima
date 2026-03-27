@@ -32,6 +32,7 @@
             <div class="menu-sep"></div>
             <button class="menu-drop-item danger" id="dd-clear-all">🗑 Cancella tutto</button>
             <div class="menu-sep"></div>
+            <button class="menu-drop-item" id="dd-quote">💰 Valuta preventivi</button>
             <button class="menu-drop-item" id="dd-print">🖨 Stampa A4</button>
           </div>
         </div>
@@ -329,6 +330,19 @@
           <div class="leg-item"><span class="leg-sw" style="background:#FF5722;border:1px dashed #BF360C"></span>Traccia corrente</div>
           <div class="leg-item"><span class="leg-sw" style="background:#00BCD4;border:1px dashed #006064"></span>Traccia condensa</div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quote modal -->
+  <div id="modal-quote" class="modal-overlay" style="display:none">
+    <div class="modal-box modal-box-xl">
+      <div class="modal-header">
+        <h2>💰 Valuta Preventivi</h2>
+        <button class="modal-close" data-modal="modal-quote">✕</button>
+      </div>
+      <div class="modal-body" id="quote-container">
+        <!-- populated dynamically by renderQuoteModal() -->
       </div>
     </div>
   </div>

@@ -397,6 +397,9 @@ function _initDropdowns() {
   document.getElementById('dd-clear-all').addEventListener('click', () => {
     _closeAllDropdowns(); clearAll();
   });
+  document.getElementById('dd-quote').addEventListener('click', () => {
+    _closeAllDropdowns(); renderQuoteModal(); openModal('modal-quote');
+  });
   document.getElementById('dd-print').addEventListener('click', () => {
     _closeAllDropdowns(); printReport();
   });
@@ -3981,6 +3984,251 @@ function _bindListiniEvents(container, data) {
       _saveStoredListini(fresh);
     });
   });
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Valuta Preventivi  (quote evaluation)
+// ════════════════════════════════════════════════════════════════
+
+/** Format a number as Italian-style euro: "€ 123,50". Null → "—". */
+function _fmtEur(amount) {
+  if (amount === null || amount === undefined || isNaN(amount)) return '—';
+  return '\u20ac\u00a0' + amount.toFixed(2).replace('.', ',');
+}
+
+/**
+ * Compute quote data for all installers based on the current project state.
+ *
+ * Rules:
+ *   - Installation base: row key = `{mono|dual|trial}_{pred|new}`
+ *   - New install only: extra pipe meters = ceil(totalMeters) - 3, charged at `linea_mt` per metre
+ *   - Predisposizione/sostituzione: no pipe-line cost
+ *   - Power pipe: extra = ceil(totalMeters) - 2, charged at `corrente_mt` per metre
+ *   - Condensa pipe: extra = ceil(meters) - 2, charged at `condensa_mt` per metre
+ *   - Staffa: `staffa_mono` if single split, `staffa_multi` if dual/trial
+ *   - Ponteggio: not auto-computed (no project-state flag)
+ *
+ * @returns {{ installers: string[], lines: Array, totals: Array<number|null>, isPred: boolean, splitType: number }}
+ */
+function computeQuoteData() {
+  const data        = getStoredListini();
+  const numInst     = data.installers.length;
+  const isPred      = app.materials.predisposizione;
+  const splitType   = app.splitType;
+  const hasStaffa   = app.materials.staffaUE;
+
+  /** Get numeric price for rowKey + column index, or null if not set. */
+  const priceOf = (rowKey, ci) => {
+    const col = data.prices[rowKey];
+    if (!col || col[ci] === undefined || col[ci] === '') return null;
+    const v = parseFloat(col[ci]);
+    return isNaN(v) ? null : v;
+  };
+
+  const lines = []; // { label, amounts: [number|null, ...] }
+
+  // ── 1. Base installation ────────────────────────────────────────
+  const splitLabel = splitType === 1 ? 'mono' : splitType === 2 ? 'dual' : 'trial';
+  const instKey    = splitLabel + (isPred ? '_pred' : '_new');
+  const instRow    = LISTINI_ROWS.find(r => r.key === instKey);
+  lines.push({
+    label:   instRow ? instRow.label : instKey,
+    amounts: Array.from({ length: numInst }, (_, ci) => priceOf(instKey, ci)),
+    isSub:   false,
+  });
+
+  // ── 2. Extra pipe line metres (new installations only) ──────────
+  if (!isPred) {
+    const traceResults = calculateResults();
+    for (let ti = 0; ti < splitType; ti++) {
+      const r = traceResults[ti];
+      if (!r) continue;
+      const roundedM = Math.ceil(r.totalMeters);
+      const extraM   = Math.max(0, roundedM - 3);
+      if (extraM > 0) {
+        lines.push({
+          label:   `Linea T${ti + 1} extra (${extraM}\u00a0m oltre i 3\u00a0m inclusi)`,
+          amounts: Array.from({ length: numInst }, (_, ci) => {
+            const p = priceOf('linea_mt', ci);
+            return p !== null ? p * extraM : null;
+          }),
+          isSub: true,
+        });
+      }
+    }
+  }
+
+  // ── 3. Power pipe extra metres ──────────────────────────────────
+  const pcResults = calculatePowerCondensaResults();
+  if (pcResults.power) {
+    const powerM    = pcResults.power.totalMeters !== undefined
+      ? pcResults.power.totalMeters : pcResults.power.meters;
+    const roundedP  = Math.ceil(powerM);
+    const extraP    = Math.max(0, roundedP - 2);
+    if (extraP > 0) {
+      lines.push({
+        label:   `Linea corrente extra (${extraP}\u00a0m oltre i 2\u00a0m inclusi)`,
+        amounts: Array.from({ length: numInst }, (_, ci) => {
+          const p = priceOf('corrente_mt', ci);
+          return p !== null ? p * extraP : null;
+        }),
+        isSub: true,
+      });
+    }
+  }
+
+  // ── 4. Condensa pipe extra metres ───────────────────────────────
+  if (pcResults.condensa) {
+    const roundedC = Math.ceil(pcResults.condensa.meters);
+    const extraC   = Math.max(0, roundedC - 2);
+    if (extraC > 0) {
+      lines.push({
+        label:   `Linea condensa extra (${extraC}\u00a0m oltre i 2\u00a0m inclusi)`,
+        amounts: Array.from({ length: numInst }, (_, ci) => {
+          const p = priceOf('condensa_mt', ci);
+          return p !== null ? p * extraC : null;
+        }),
+        isSub: true,
+      });
+    }
+  }
+
+  // ── 5. Staffa ───────────────────────────────────────────────────
+  if (hasStaffa) {
+    const staffaKey = splitType === 1 ? 'staffa_mono' : 'staffa_multi';
+    const staffaRow = LISTINI_ROWS.find(r => r.key === staffaKey);
+    lines.push({
+      label:   staffaRow ? staffaRow.label : staffaKey,
+      amounts: Array.from({ length: numInst }, (_, ci) => priceOf(staffaKey, ci)),
+      isSub:   false,
+    });
+  }
+
+  // ── Totals ──────────────────────────────────────────────────────
+  const totals = Array.from({ length: numInst }, (_, ci) => {
+    let sum = 0, hasAny = false;
+    for (const line of lines) {
+      const a = line.amounts[ci];
+      if (a !== null) { sum += a; hasAny = true; }
+    }
+    return hasAny ? sum : null;
+  });
+
+  return { installers: data.installers, lines, totals, isPred, splitType };
+}
+
+/**
+ * (Re-)render the quote comparison table inside #quote-container.
+ * Called each time the modal is opened.
+ */
+function renderQuoteModal() {
+  const container = document.getElementById('quote-container');
+  if (!container) return;
+
+  const traceResults = calculateResults();
+  const pcResults    = calculatePowerCondensaResults();
+  const splitNames   = ['Mono (1 split)', 'Dual (2 split)', 'Trial (3 split)'];
+  const splitType    = app.splitType;
+  const isPred       = app.materials.predisposizione;
+
+  // ── Project context card ────────────────────────────────────────
+  let ctx = '<div class="quote-context">';
+  ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Configurazione</span>` +
+    `<span class="quote-ctx-val">${_escHtml(splitNames[splitType - 1])}</span></div>`;
+  ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Tipo lavoro</span>` +
+    `<span class="quote-ctx-val">${isPred ? 'Predisposizione / Sostituzione' : 'Nuovo impianto'}</span></div>`;
+
+  for (let ti = 0; ti < splitType; ti++) {
+    const r = traceResults[ti];
+    const label = splitType > 1 ? `Traccia T${ti + 1}` : 'Traccia';
+    const color = PIPE_COLORS[ti];
+    if (r) {
+      const roundedM = Math.ceil(r.totalMeters);
+      const extraM   = (!isPred) ? Math.max(0, roundedM - 3) : 0;
+      const detail   = isPred
+        ? `${roundedM}\u00a0m (non addebitata)`
+        : extraM > 0
+          ? `${roundedM}\u00a0m (3 inclusi + ${extraM} extra)`
+          : `${roundedM}\u00a0m (inclusi nel base)`;
+      ctx += `<div class="quote-ctx-item">` +
+        `<span class="quote-ctx-lbl" style="color:${color}">${_escHtml(label)}</span>` +
+        `<span class="quote-ctx-val">${_escHtml(detail)}</span></div>`;
+    }
+  }
+  if (pcResults.power) {
+    const powerM   = pcResults.power.totalMeters !== undefined
+      ? pcResults.power.totalMeters : pcResults.power.meters;
+    const roundedP = Math.ceil(powerM);
+    const extraP   = Math.max(0, roundedP - 2);
+    const detail   = extraP > 0
+      ? `${roundedP}\u00a0m (2 inclusi + ${extraP} extra)`
+      : `${roundedP}\u00a0m (inclusi nel base)`;
+    ctx += `<div class="quote-ctx-item">` +
+      `<span class="quote-ctx-lbl" style="color:${POWER_COLOR}">⚡ Corrente</span>` +
+      `<span class="quote-ctx-val">${_escHtml(detail)}</span></div>`;
+  }
+  if (pcResults.condensa) {
+    const roundedC = Math.ceil(pcResults.condensa.meters);
+    const extraC   = Math.max(0, roundedC - 2);
+    const detail   = extraC > 0
+      ? `${roundedC}\u00a0m (2 inclusi + ${extraC} extra)`
+      : `${roundedC}\u00a0m (inclusi nel base)`;
+    ctx += `<div class="quote-ctx-item">` +
+      `<span class="quote-ctx-lbl" style="color:${CONDENSA_COLOR}">💧 Condensa</span>` +
+      `<span class="quote-ctx-val">${_escHtml(detail)}</span></div>`;
+  }
+  if (app.materials.staffaUE) {
+    ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Staffa u.e.</span>` +
+      `<span class="quote-ctx-val">Sì</span></div>`;
+  }
+  if (app.materials.lavaggioImpianto) {
+    ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Lavaggio impianto</span>` +
+      `<span class="quote-ctx-val">Sì (non in listino)</span></div>`;
+  }
+  ctx += '</div>';
+
+  // ── No installers configured ────────────────────────────────────
+  const qData = computeQuoteData();
+  if (qData.installers.length === 0) {
+    container.innerHTML = ctx +
+      `<div class="listini-empty-state" style="margin-top:16px">` +
+      `<strong>Nessun listino configurato</strong>` +
+      `Configura almeno un installatore in ⚙ Impostazioni → Gestione Listini.` +
+      `</div>`;
+    return;
+  }
+
+  // ── Comparison table ────────────────────────────────────────────
+  let html = ctx + '<div class="listini-scroll" style="margin-top:16px"><table class="quote-table"><thead><tr>';
+  html += '<th class="quote-th-label">Voce</th>';
+  qData.installers.forEach(name =>
+    html += `<th class="quote-th-amount">${_escHtml(name)}</th>`
+  );
+  html += '</tr></thead><tbody>';
+
+  qData.lines.forEach(line => {
+    html += `<tr class="${line.isSub ? 'quote-row-sub' : ''}">`;
+    html += `<td class="quote-td-label">${_escHtml(line.label)}</td>`;
+    line.amounts.forEach(a => {
+      const cls = a !== null ? 'quote-td-amount' : 'quote-td-amount quote-td-missing';
+      html += `<td class="${cls}">${_fmtEur(a)}</td>`;
+    });
+    html += '</tr>';
+  });
+
+  // Total row
+  html += '<tr class="quote-total-row"><td class="quote-td-label">💶 Totale stimato</td>';
+  qData.totals.forEach(t => {
+    const cls = t !== null ? 'quote-td-amount' : 'quote-td-amount quote-td-missing';
+    html += `<td class="${cls}">${_fmtEur(t)}</td>`;
+  });
+  html += '</tr></tbody></table></div>';
+
+  html += `<p class="quote-footnote">I prezzi sono indicativi e basati sui listini configurati. ` +
+    `Le distanze tracce sono arrotondate per eccesso al metro intero. ` +
+    `Il ponteggio (se necessario) non è incluso nel calcolo automatico.</p>`;
+
+  container.innerHTML = html;
 }
 
 // ════════════════════════════════════════════════════════════════
