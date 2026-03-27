@@ -2860,17 +2860,6 @@ function clearCondensatePipeTrace() {
   updateResults();
 }
 
-/** Legacy: clear trace according to active tool (kept for keyboard shortcut / undo). */
-function clearPipe() {
-  if (app.tool === 'drawPowerPipe') {
-    clearPowerPipeTrace();
-  } else if (app.tool === 'drawCondensaPipe') {
-    clearCondensatePipeTrace();
-  } else {
-    clearActivePipeTrace();
-  }
-}
-
 function clearAll() {
   if (!confirm('Cancellare tutto? Anche la cronologia undo verrà eliminata e non sarà possibile recuperare nulla.')) return;
   app.rooms         = [];
@@ -3783,13 +3772,13 @@ function renderHomepageProjects(filter) {
         `<div class="hp-proj-date">${_escHtml(new Date(p.savedAt).toLocaleString('it-IT'))}</div>` +
       `</div>` +
       `<div class="hp-proj-actions">` +
-        `<button class="hp-proj-btn" title="Apri progetto">📂 Apri</button>` +
-        `<button class="hp-proj-btn rename" title="Rinomina progetto">✏ Rinomina</button>` +
-        `<button class="hp-proj-btn del" title="Elimina progetto">🗑 Elimina</button>` +
+        `<button class="hp-proj-btn" data-action="load"   title="Apri progetto">📂 Apri</button>` +
+        `<button class="hp-proj-btn rename" data-action="rename" title="Rinomina progetto">✏ Rinomina</button>` +
+        `<button class="hp-proj-btn del"    data-action="delete" title="Elimina progetto">🗑 Elimina</button>` +
       `</div>`;
-    item.querySelectorAll('.hp-proj-btn')[0].addEventListener('click', () => loadProject(p.id));
-    item.querySelectorAll('.hp-proj-btn')[1].addEventListener('click', () => renameProject(p.id));
-    item.querySelectorAll('.hp-proj-btn')[2].addEventListener('click', () => deleteProject(p.id));
+    item.querySelector('[data-action="load"]')  .addEventListener('click', () => loadProject(p.id));
+    item.querySelector('[data-action="rename"]').addEventListener('click', () => renameProject(p.id));
+    item.querySelector('[data-action="delete"]').addEventListener('click', () => deleteProject(p.id));
     container.appendChild(item);
   }
 }
