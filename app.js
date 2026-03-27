@@ -31,7 +31,7 @@ const CONDENSA_COLOR = '#00BCD4';
 const CONDENSA_DARK  = '#006064';
 
 // Keys for the materials/works checklist (used in init, undo, clearAll)
-const MATERIALS_KEYS = ['staffaUE', 'lavaggioImpianto', 'predisposizione'];
+const MATERIALS_KEYS = ['staffaUE', 'lavaggioImpianto', 'predisposizione', 'ponteggio'];
 
 // Logo data-URL (preloaded at startup for embedding in print)
 let LOGO_DATA_URL = null;
@@ -144,7 +144,7 @@ const app = {
   zoom: 1, panX: 0, panY: 0, _panStart: null, _panStartMouse: null,
 
   // Materials / works checklist
-  materials: { staffaUE: false, lavaggioImpianto: false, predisposizione: false },
+  materials: { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false },
 
   // Print notes (not drawn on canvas)
   indoorNotes: ['', '', ''],  // one note per indoor-unit slot (indices 0-2)
@@ -330,7 +330,7 @@ function startNewProject() {
   app.bgImage       = null;
   app.calibPt1      = null;
   app.metersPerCell = 0.5;
-  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false };
   MATERIALS_KEYS.forEach(key => {
     const el = document.getElementById('mat-' + key);
     if (el) el.checked = false;
@@ -2889,7 +2889,7 @@ function clearAll() {
   app.wallStart     = null;
   app.splitType     = 1;
   app.activePipeIdx = 0;
-  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+  app.materials = { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false };
   MATERIALS_KEYS.forEach(key => {
     const el = document.getElementById('mat-' + key);
     if (el) el.checked = false;
@@ -3471,7 +3471,8 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
   const MAT_LABELS = {
     staffaUE:         'Staffa unità esterna',
     lavaggioImpianto: 'Lavaggio impianto',
-    predisposizione:  'Predisposizione'
+    predisposizione:  'Predisposizione',
+    ponteggio:        'Ponteggio'
   };
   const checkedMats = MATERIALS_KEYS.filter(k => app.materials[k]);
   const materialsHTML = checkedMats.length > 0 ? `
@@ -3696,7 +3697,7 @@ function loadProject(id) {
     app.pipes            = s.pipes            ?? [[]];
     app.splitType        = s.splitType        ?? 1;
     app.activePipeIdx    = s.activePipeIdx    ?? 0;
-    app.materials        = s.materials        ?? { staffaUE: false, lavaggioImpianto: false, predisposizione: false };
+    app.materials        = s.materials        ?? { staffaUE: false, lavaggioImpianto: false, predisposizione: false, ponteggio: false };
     app.powerOutlet      = s.powerOutlet      ?? null;
     app.outletHeight     = s.outletHeight     ?? 0;
     app.condensateDrain  = s.condensateDrain  ?? null;
@@ -4104,6 +4105,16 @@ function computeQuoteData() {
     });
   }
 
+  // ── 6. Ponteggio ────────────────────────────────────────────────
+  if (app.materials.ponteggio) {
+    const pontRow = LISTINI_ROWS.find(r => r.key === 'ponteggio');
+    lines.push({
+      label:   pontRow ? pontRow.label : 'Ponteggio',
+      amounts: Array.from({ length: numInst }, (_, ci) => priceOf('ponteggio', ci)),
+      isSub:   false,
+    });
+  }
+
   // ── Totals ──────────────────────────────────────────────────────
   const totals = Array.from({ length: numInst }, (_, ci) => {
     let sum = 0, hasAny = false;
@@ -4185,6 +4196,10 @@ function renderQuoteModal() {
     ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Lavaggio impianto</span>` +
       `<span class="quote-ctx-val">Sì (non in listino)</span></div>`;
   }
+  if (app.materials.ponteggio) {
+    ctx += `<div class="quote-ctx-item"><span class="quote-ctx-lbl">Ponteggio</span>` +
+      `<span class="quote-ctx-val">Sì</span></div>`;
+  }
   ctx += '</div>';
 
   // ── No installers configured ────────────────────────────────────
@@ -4216,17 +4231,26 @@ function renderQuoteModal() {
     html += '</tr>';
   });
 
-  // Total row
-  html += '<tr class="quote-total-row"><td class="quote-td-label">💶 Totale stimato</td>';
+  // Total row (IVA excluded)
+  html += '<tr class="quote-total-row"><td class="quote-td-label">💶 Totale (IVA esclusa)</td>';
   qData.totals.forEach(t => {
     const cls = t !== null ? 'quote-td-amount' : 'quote-td-amount quote-td-missing';
     html += `<td class="${cls}">${_fmtEur(t)}</td>`;
   });
+  html += '</tr>';
+
+  // IVA 10% row
+  html += '<tr class="quote-iva-row"><td class="quote-td-label">💶 Totale IVA 10% inclusa</td>';
+  qData.totals.forEach(t => {
+    const cls = t !== null ? 'quote-td-amount' : 'quote-td-amount quote-td-missing';
+    html += `<td class="${cls}">${_fmtEur(t !== null ? t * 1.10 : null)}</td>`;
+  });
   html += '</tr></tbody></table></div>';
 
+  html += `<p class="quote-disclaimer">Prezzi IVA inclusa a noi.</p>`;
+
   html += `<p class="quote-footnote">I prezzi sono indicativi e basati sui listini configurati. ` +
-    `Le distanze tracce sono arrotondate per eccesso al metro intero. ` +
-    `Il ponteggio (se necessario) non è incluso nel calcolo automatico.</p>`;
+    `Le distanze tracce sono arrotondate per eccesso al metro intero.</p>`;
 
   container.innerHTML = html;
 }

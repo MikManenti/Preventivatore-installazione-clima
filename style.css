@@ -1133,3 +1133,36 @@ kbd {
   margin-top: 12px;
   line-height: 1.5;
 }
+
+/* ── IVA total row ── */
+.quote-iva-row {
+  background: #e6f4ea !important;
+  border-top: 2px solid #34a853 !important;
+}
+
+.quote-iva-row .quote-td-label {
+  font-weight: 700;
+  color: #1e7e34;
+  font-size: 14px;
+}
+
+.quote-iva-row .quote-td-amount {
+  font-weight: 800;
+  color: #1e7e34;
+  font-size: 14px;
+}
+
+.quote-iva-row .quote-td-missing {
+  color: #9aa0a6;
+  font-weight: 400;
+}
+
+/* ── IVA disclaimer ── */
+.quote-disclaimer {
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 600;
+  color: #1e7e34;
+  margin-top: 6px;
+  margin-bottom: 0;
+}
