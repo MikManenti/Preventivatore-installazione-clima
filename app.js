@@ -403,6 +403,9 @@ function _initDropdowns() {
   document.getElementById('dd-print').addEventListener('click', () => {
     _closeAllDropdowns(); printReport();
   });
+  document.getElementById('dd-print-installer').addEventListener('click', () => {
+    _closeAllDropdowns(); renderInstallerPrintModal(); openModal('modal-print-installer');
+  });
 
   // ── Help dropdown items ───────────────────────────────────────
   document.getElementById('dd-guide').addEventListener('click', () => {
@@ -3592,7 +3595,7 @@ function buildPrintHTML(customerName, dateStr, dataURL) {
 
 /**
  * Ask for customer name, render floor plan, build HTML and open print dialog.
- * Triggered by the 🖨 Stampa A4 button.
+ * Triggered by the 🖨 Stampa cliente button.
  */
 function printReport() {
   const customerName = prompt('Nome del cliente (Invio per lasciare vuoto):', '');
@@ -3613,6 +3616,338 @@ function printReport() {
   pw.document.write(html);
   pw.document.close();
 }
+
+/**
+ * Populate and open the installer-print selection modal.
+ * Triggered by the 🖨 Stampa installatore button.
+ */
+function renderInstallerPrintModal() {
+  const container = document.getElementById('print-installer-container');
+  if (!container) return;
+
+  const data = getStoredListini();
+  if (data.installers.length === 0) {
+    container.innerHTML =
+      `<div class="listini-empty-state">` +
+      `<strong>Nessun installatore configurato</strong>` +
+      `<p>Configura almeno un installatore in ⚙ Impostazioni → Gestione Listini.</p>` +
+      `</div>`;
+    return;
+  }
+
+  let optionsHTML = data.installers
+    .map((name, i) => `<option value="${i}">${_escHtml(name)}</option>`)
+    .join('');
+
+  container.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label for="pi-installer-select" style="display:block;margin-bottom:4px;font-weight:600">Installatore</label>
+        <select id="pi-installer-select" style="width:100%;padding:6px 8px;border:1px solid #dadce0;border-radius:4px;font-size:10.5pt">
+          ${optionsHTML}
+        </select>
+      </div>
+      <div>
+        <label for="pi-customer-input" style="display:block;margin-bottom:4px;font-weight:600">Nome cliente <span style="font-weight:400;color:#888">(opzionale)</span></label>
+        <input id="pi-customer-input" type="text" maxlength="100" placeholder="Nome del cliente…"
+          style="width:100%;padding:6px 8px;border:1px solid #dadce0;border-radius:4px;font-size:10.5pt">
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+        <button id="pi-cancel-btn" class="modal-close" data-modal="modal-print-installer"
+          style="padding:6px 16px;border:1px solid #dadce0;border-radius:4px;background:#fff;cursor:pointer;font-size:10pt">
+          Annulla
+        </button>
+        <button id="pi-confirm-btn"
+          style="padding:6px 16px;border:none;border-radius:4px;background:#1565C0;color:#fff;cursor:pointer;font-size:10pt;font-weight:600">
+          🖨 Stampa
+        </button>
+      </div>
+    </div>`;
+
+  document.getElementById('pi-confirm-btn').addEventListener('click', () => {
+    const ci           = parseInt(document.getElementById('pi-installer-select').value, 10);
+    const installerName = data.installers[ci];
+    const customerName  = (document.getElementById('pi-customer-input').value || '').trim();
+    closeModal('modal-print-installer');
+    printInstallerReport(installerName, ci, customerName);
+  });
+}
+
+/**
+ * Build and open the installer print (with non-VAT cost breakdown).
+ *
+ * @param {string} installerName  - Display name of the selected installer
+ * @param {number} installerIdx   - Column index in the listini data
+ * @param {string} customerName   - Optional customer name
+ */
+function printInstallerReport(installerName, installerIdx, customerName) {
+  const dateStr = new Date().toLocaleDateString('it-IT', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+  const dataURL = renderPrintCanvas();
+  const html    = buildInstallerPrintHTML(installerName, installerIdx, customerName, dateStr, dataURL);
+
+  const pw = window.open('', '_blank', 'width=960,height=820,menubar=yes,toolbar=yes');
+  if (!pw) {
+    alert('Il browser ha bloccato il popup.\nAbilita i popup per questo sito e riprova.');
+    return;
+  }
+  pw.document.open();
+  pw.document.write(html);
+  pw.document.close();
+}
+
+/**
+ * Build the installer print HTML – identical to buildPrintHTML but with an
+ * additional non-VAT cost breakdown section for the selected installer.
+ *
+ * @param {string} installerName
+ * @param {number} installerIdx
+ * @param {string} customerName
+ * @param {string} dateStr
+ * @param {string|null} dataURL
+ * @returns {string}
+ */
+function buildInstallerPrintHTML(installerName, installerIdx, customerName, dateStr, dataURL) {
+  const results   = calculateResults();
+  const pcResults = calculatePowerCondensaResults();
+
+  // ── Trace summary table ────────────────────────────────────────
+  const hasAnyTrace = results.some(r => r !== null) || pcResults.power || pcResults.condensa;
+  const showDelta   = results.some(r => r && r.heightDiff > 0) ||
+                      (pcResults.power && (pcResults.power.heightDiff || 0) > 0);
+  const showNoteCol = (app.indoorNotes || []).slice(0, app.splitType).some(n => n && n.trim());
+
+  let traceRows = '';
+  for (let i = 0; i < app.splitType; i++) {
+    const r     = results[i];
+    const color = PIPE_COLORS[i];
+    const note  = _escHtml((app.indoorNotes && app.indoorNotes[i]) || '');
+    if (r) {
+      traceRows += `<tr>
+        <td style="color:${color};font-weight:700">T${i + 1}</td>
+        <td>${r.meters.toFixed(1)} m</td>
+        ${showDelta ? `<td>${r.heightDiff > 0 ? r.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
+        <td>${r.crossings}</td>
+        ${showNoteCol ? `<td class="note-cell">${note}</td>` : ''}
+      </tr>`;
+    } else {
+      traceRows += `<tr>
+        <td style="color:${color};font-weight:700">T${i + 1}</td>
+        <td colspan="${showDelta ? 3 : 2}" style="color:#aaa">—</td>
+        ${showNoteCol ? `<td class="note-cell">${note}</td>` : ''}
+      </tr>`;
+    }
+  }
+  if (pcResults.power) {
+    const pm = pcResults.power;
+    traceRows += `<tr>
+      <td style="color:${POWER_COLOR};font-weight:700">⚡ Corrente</td>
+      <td>${(pm.totalMeters != null ? pm.totalMeters : pm.meters).toFixed(1)} m</td>
+      ${showDelta ? `<td>${(pm.heightDiff || 0) > 0 ? pm.heightDiff.toFixed(1) + ' m' : '—'}</td>` : ''}
+      <td>${pm.crossings}</td>
+      ${showNoteCol ? '<td></td>' : ''}
+    </tr>`;
+  }
+  if (pcResults.condensa) {
+    const cm = pcResults.condensa;
+    traceRows += `<tr>
+      <td style="color:${CONDENSA_COLOR};font-weight:700">💧 Condensa</td>
+      <td>${cm.meters.toFixed(1)} m</td>
+      ${showDelta ? '<td>—</td>' : ''}
+      <td>${cm.crossings}</td>
+      ${showNoteCol ? '<td></td>' : ''}
+    </tr>`;
+  }
+
+  const traceTableHTML = hasAnyTrace ? `
+    <h2 class="sec-title">📐 Lunghezze tracce</h2>
+    <table>
+      <thead><tr>
+        <th>Traccia</th>
+        <th>Lunghezza tracciato</th>
+        ${showDelta ? '<th>Δh altezze</th>' : ''}
+        <th>Fori parete</th>
+        ${showNoteCol ? '<th>Note</th>' : ''}
+      </tr></thead>
+      <tbody>${traceRows}</tbody>
+    </table>` : '';
+
+  // ── Drilling-point summary ─────────────────────────────────────
+  const drillingPts  = collectDrillingPoints(true);
+  const totalHoles   = drillingPts.length;
+  const complexity   = complexityLabel(totalHoles);
+  const holesNote    = (app.holesNote && app.holesNote.trim())
+    ? ` <span class="inline-note">— ${_escHtml(app.holesNote)}</span>` : '';
+  const holesHTML    = totalHoles > 0
+    ? `<p class="info-row">🔩 <strong>Fori totali nelle pareti: ${totalHoles}</strong> — ${complexity.text}${holesNote}</p>`
+    : '';
+
+  // ── Outdoor unit note ──────────────────────────────────────────
+  const outdoorNoteHTML = (app.outdoorNote && app.outdoorNote.trim())
+    ? `<p class="info-row">🌡 <strong>Nota u. esterna:</strong> <span class="inline-note">${_escHtml(app.outdoorNote)}</span></p>`
+    : '';
+
+  // ── Materials / works ──────────────────────────────────────────
+  const MAT_LABELS = {
+    staffaUE:         'Staffa unità esterna',
+    lavaggioImpianto: 'Lavaggio impianto',
+    predisposizione:  'Predisposizione',
+    ponteggio:        'Ponteggio'
+  };
+  const checkedMats = MATERIALS_KEYS.filter(k => app.materials[k]);
+  const materialsHTML = checkedMats.length > 0 ? `
+    <h2 class="sec-title">🔧 Materiali / Lavorazioni</h2>
+    <ul class="mat-list">
+      ${checkedMats.map(k => `<li>${MAT_LABELS[k]}</li>`).join('')}
+    </ul>` : '';
+
+  // ── Cost breakdown (IVA excluded) ──────────────────────────────
+  const qData = computeQuoteData();
+  const ci    = installerIdx;
+  let costRows = '';
+  for (const line of qData.lines) {
+    const a = line.amounts[ci];
+    costRows += `<tr class="${line.isSub ? 'cost-row-sub' : ''}">
+      <td class="cost-td-label">${_escHtml(line.label)}</td>
+      <td class="cost-td-amount">${_fmtEur(a)}</td>
+    </tr>`;
+  }
+  const total = qData.totals[ci];
+  const costTableHTML = qData.lines.length > 0 ? `
+    <h2 class="sec-title">💶 Dettaglio costi (IVA esclusa)</h2>
+    <table>
+      <thead><tr>
+        <th class="cost-th-label">Voce</th>
+        <th class="cost-th-amount">Importo</th>
+      </tr></thead>
+      <tbody>
+        ${costRows}
+        <tr class="cost-total-row">
+          <td class="cost-td-label"><strong>Totale IVA esclusa</strong></td>
+          <td class="cost-td-amount"><strong>${_fmtEur(total)}</strong></td>
+        </tr>
+      </tbody>
+    </table>` : '';
+
+  // ── General note ───────────────────────────────────────────────
+  const generalNoteHTML = (app.generalNote && app.generalNote.trim())
+    ? `<div class="general-note-wrap">
+        <h2 class="sec-title">📝 Note</h2>
+        <p class="general-note">${_escHtml(app.generalNote).replace(/\n/g, '<br>')}</p>
+      </div>` : '';
+
+  // ── Floor plan image ───────────────────────────────────────────
+  const imgHTML = dataURL
+    ? `<img src="${dataURL}" alt="Planimetria" class="floor-img" />`
+    : `<p style="color:#aaa;text-align:center">(nessuna planimetria disegnata)</p>`;
+
+  const safeInstaller = _escHtml(installerName || '—');
+  const safeCustomer  = _escHtml(customerName || '—');
+  const safeDate      = _escHtml(dateStr);
+
+  return `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Preventivo Installatore${installerName ? ' \u2014 ' + _escHtml(installerName) : ''}</title>
+  <style>
+    @page { size: A4 portrait; margin: 15mm; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 10.5pt;
+      color: #202124;
+      background: #fff;
+    }
+    /* Header */
+    .print-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      border-bottom: 3px solid #1565C0;
+      padding-bottom: 6px;
+      margin-bottom: 10px;
+    }
+    .app-name { font-size: 13pt; font-weight: 700; color: #1565C0; }
+    .meta     { text-align: right; font-size: 10pt; line-height: 1.6; }
+    .meta .installer { font-weight: 700; font-size: 11.5pt; }
+    /* Floor plan */
+    .floor-wrap { text-align: center; margin-bottom: 10px; }
+    .floor-img  { max-width: 100%; border: 1px solid #dadce0; display: block; margin: 0 auto; }
+    /* Summary */
+    .sec-title {
+      font-size: 11pt; font-weight: 700; color: #1565C0;
+      margin: 10px 0 5px; border-bottom: 1px solid #dadce0; padding-bottom: 3px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; margin-bottom: 6px; }
+    th { background: #1565C0; color: #fff; padding: 5px 8px; text-align: left; }
+    td { border: 1px solid #dadce0; padding: 4px 8px; }
+    tr:nth-child(even) td { background: #f8f9fa; }
+    .note-cell { font-style: italic; color: #5f6368; }
+    .info-row  { margin: 6px 0; font-size: 10.5pt; }
+    .inline-note { font-style: italic; color: #5f6368; }
+    .mat-list  { padding-left: 18px; font-size: 10pt; line-height: 1.9; }
+    /* Cost table */
+    .cost-th-label  { width: 75%; }
+    .cost-th-amount { width: 25%; text-align: right; }
+    .cost-td-amount { text-align: right; font-variant-numeric: tabular-nums; }
+    .cost-row-sub td { padding-left: 20px; color: #5f6368; font-size: 9.5pt; }
+    .cost-total-row td { background: #e8f0fe !important; font-size: 10.5pt; }
+    /* General note */
+    .general-note-wrap { margin-top: 10px; }
+    .general-note { font-size: 10.5pt; line-height: 1.6; white-space: pre-wrap; }
+    /* Footer */
+    .print-footer {
+      margin-top: 14px; text-align: center;
+      font-size: 8.5pt; color: #80868b;
+      border-top: 1px solid #dadce0; padding-top: 4px;
+    }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-header">
+    <div class="app-name">${LOGO_DATA_URL ? `<img src="${LOGO_DATA_URL}" alt="Logo" style="height:56px;width:auto;display:block;margin-bottom:2px" />` : ''}</div>
+    <div class="meta">
+      <div class="installer">Installatore: ${safeInstaller}</div>
+      <div>Cliente: ${safeCustomer}</div>
+      <div>Data: ${safeDate}</div>
+    </div>
+  </div>
+
+  <div class="floor-wrap">${imgHTML}</div>
+
+  <div class="summary">
+    ${traceTableHTML}
+    ${holesHTML}
+    ${outdoorNoteHTML}
+    ${materialsHTML}
+    ${costTableHTML}
+    ${generalNoteHTML}
+  </div>
+
+  <div class="print-footer">
+    Documento generato automaticamente — ${safeDate}
+  </div>
+
+  <script>
+    // Auto-open print dialog once the image has loaded
+    (function () {
+      var img = document.querySelector('.floor-img');
+      if (img) {
+        img.addEventListener('load', function () { setTimeout(window.print, 300); });
+      } else {
+        setTimeout(window.print, 300);
+      }
+    })();
+  <\/script>
+</body>
+</html>`;
+}
+
 
 // ════════════════════════════════════════════════════════════════
 //  Saved Projects  (localStorage)
